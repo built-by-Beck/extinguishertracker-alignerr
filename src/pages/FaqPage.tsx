@@ -1,0 +1,234 @@
+import { Link } from 'react-router-dom';
+import { HelpCircle } from 'lucide-react';
+
+const faqSections = [
+  {
+    title: 'Setup and onboarding',
+    items: [
+      {
+        q: 'What should we do first after creating an account?',
+        a: 'Create or join your organization, add locations, then load extinguisher inventory. After that, create a workspace and run inspections.',
+      },
+      {
+        q: 'Where do I invite team members?',
+        a: 'Go to Settings and open the Members area. Owners/Admins can invite users and assign roles.',
+      },
+      {
+        q: 'How should roles be used?',
+        a: 'Use owner/admin access for people managing setup, billing, members, and program configuration. Inspector and viewer access should stay focused on field work and record visibility.',
+      },
+      {
+        q: 'Can users upload profile photos or organization logos?',
+        a: 'Users choose from preset avatars instead of uploading personal profile photos. Organization logo branding is available to the organization creator on Pro, Elite, and Enterprise plans with strict image type, size, path, and permission checks.',
+      },
+    ],
+  },
+  {
+    title: 'Inventory and import',
+    items: [
+      {
+        q: 'Do we need every field before importing?',
+        a: 'No. Start with core fields and use Data Organizer to fill missing details after import.',
+      },
+      {
+        q: 'What happens if asset IDs are duplicated?',
+        a: 'Rows with duplicate asset IDs are skipped so existing records are not overwritten unexpectedly.',
+      },
+      {
+        q: 'Where can I find the import format?',
+        a: 'Use the Import Guide from Inventory for templates and exact column expectations.',
+      },
+      {
+        q: 'How do barcode, QR, and tag printing fit together?',
+        a: 'Barcode search and QR links help field users reach the right record quickly. Printable lists and tag printing help connect the digital record back to physical equipment and route paperwork.',
+      },
+      {
+        q: 'What should we do when an extinguisher is replaced?',
+        a: 'Use Replace Extinguisher from the active unit detail page instead of overwriting history by hand. The modal confirms the old unit, lets admins reuse the existing asset/location ID or intentionally enter a new asset ID, archives the old serial/barcode/unit details, and updates the active record with the replacement unit.',
+      },
+      {
+        q: 'Where can we review old replaced units or return one as a spare?',
+        a: 'Open Replaced Extinguishers from the sidebar. It shows each retired old unit beside its current replacement, lets owners/admins track waiting-for-service, sent-for-service, discarded, or returned status, and can create a returned old unit as a new active spare record with a unique spare asset ID.',
+      },
+      {
+        q: 'What is the difference between marked expired and possible expired candidates?',
+        a: 'Marked Expired is the official list: only active, non-deleted extinguishers where the expired flag has been saved. Possible Candidates is an advisory follow-up list for active units manufactured 6+ years ago that are not marked expired yet.',
+      },
+    ],
+  },
+  {
+    title: 'Inspections and compliance',
+    items: [
+      {
+        q: 'How do we start monthly inspections?',
+        a: 'Open Inspections, create the active month workspace, then inspect items by location/section and resolve follow-ups.',
+      },
+      {
+        q: 'How does AI help during inspections?',
+        a: 'On Pro, Elite, and Enterprise plans, AI can help answer compliance questions, summarize overdue items, answer questions about a temporary uploaded or camera photo, and reduce context switching while technicians are in the field. Photo questions are sent for analysis only and are not saved as inspection photos.',
+      },
+      {
+        q: 'Which NFPA edition does AI use?',
+        a: 'AI uses the NFPA reference configured in Organization Settings. New organizations fall back to NFPA 10 (2022) until an owner/admin selects another edition or adds AHJ-specific notes; final decisions still need qualified internal review.',
+      },
+      {
+        q: 'Does the placement calculator guarantee compliance?',
+        a: 'No. Treat it as a planning aid. Final placement and compliance decisions should be confirmed against your adopted code edition, internal policy, qualified judgment, and AHJ direction.',
+      },
+      {
+        q: 'What should we do after working offline?',
+        a: 'Open the Sync Queue and confirm queued work has synced before treating reports or dashboard totals as final.',
+      },
+    ],
+  },
+  {
+    title: 'AI assistant',
+    items: [
+      {
+        q: 'What can I ask the AI assistant?',
+        a: 'Ask anything connected to your extinguisher program. Compliance questions like "Can you tell me how far extinguishers are supposed to be apart according to NFPA 2022?" or "What are the annual inspection requirements for a CO2 extinguisher?" — status checks like "Which extinguishers are overdue for their annual inspection?" or "Summarize what is currently failing in inventory" — note drafting like "Write a professional follow-up note for Unit A-12: gauge was slightly low, passed visual, recheck in 30 days" — or photo questions like "I am uploading a photo of this pressure gauge — does the reading look normal?" The AI is built to reduce context switching while you are actively in the field.',
+      },
+      {
+        q: 'Can the AI help me write inspection notes?',
+        a: 'Yes. Describe the situation in plain language and ask the AI to produce a professional note. For example: "Write a note for this unit: the tamper seal was broken, gauge was in the green, and I need a follow-up check next week." The AI will draft clear, concise language you can copy directly into the inspection record — faster than composing it yourself while walking a route.',
+      },
+      {
+        q: 'Can I show the AI a photo of an extinguisher?',
+        a: 'Yes. Upload a temporary photo or use your device camera and ask the AI about what it sees — whether a gauge reading looks correct, whether visible damage is worth flagging, or what to check next. These photos are analyzed for that session only and are not saved as official inspection photos or attached to the extinguisher record.',
+      },
+      {
+        q: 'Does the AI keep context between questions in the same session?',
+        a: 'Yes. Within the same session the AI retains what you have already discussed. Ask a compliance question, then follow up with "and what does that mean for a Class A hazard area?" without repeating the background. This continuity is what makes it feel like working alongside a knowledgeable colleague rather than restarting a search engine every time.',
+      },
+      {
+        q: 'Can the AI tell me what is overdue or failing right now?',
+        a: 'Yes. Ask questions like "Which extinguishers are past their annual inspection date?" or "Give me a summary of everything currently overdue." The AI can pull context from your live inventory and inspection data and return a status summary on demand — useful before a leadership meeting, before an audit shows up, or when you need a quick picture of where the program stands without clicking through the full dashboard.',
+      },
+      {
+        q: 'Is the AI available on all plans?',
+        a: 'The AI assistant is included on Pro, Elite, and Enterprise plans. It is not available on the Basic plan. Open Settings or visit the pricing page to see what each tier includes.',
+      },
+    ],
+  },
+  {
+    title: 'Reports, sharing, and advanced workflows',
+    items: [
+      {
+        q: 'Where do notifications and reminders show up?',
+        a: 'Use Notifications to review due, overdue, and follow-up activity. Reports and dashboards help summarize the overall program status.',
+      },
+      {
+        q: 'Where can I see audit history?',
+        a: 'Open Audit Logs to review important activity and changes. These records help reconstruct what happened without relying on memory or side notes.',
+      },
+      {
+        q: 'What details are included in compliance reports?',
+        a: 'Archived workspace reports can be generated as PDF, CSV, or JSON. Each listed extinguisher includes the asset number, serial number, location, section, vicinity, inspection status, inspector details, and notes when available. On the Reports page, you can also generate focused reports for failed or expired units, passed units, pending inspections, or replacement candidates, sorted by location or asset ID.',
+      },
+      {
+        q: 'Can outside reviewers see records?',
+        a: 'Guest access is designed for limited visibility when someone needs to review shared information without becoming a full team member.',
+      },
+    ],
+  },
+  {
+    title: 'Equipment & Asset Inspections',
+    items: [
+      {
+        q: 'What are Equipment & Asset Inspections?',
+        a: 'Equipment & Asset Inspections is a recurring Pass/Fail/N/A checklist system for any physical equipment your organization manages — not only extinguishers. Optional starter templates (Elevator, Egress Lighting, Exit Sign, Egress Path, Fire Door, Sprinkler, and Custom/Blank) are examples to save time; they are not hardcoded limits. Define each asset once — name, location, identifiers, and checklist items — and it persists under your organization. Each month you mark Pass, Fail, or N/A. Starter checklists are editable operational examples and should be reviewed for your organization’s requirements — not treated as certified compliance sign-off.',
+      },
+      {
+        q: 'How do I set up an asset?',
+        a: 'Open Equipment & Asset Inspections from the sidebar (Pro+ required). On the Setup tab, click Add Asset and optionally pick a starter template. Templates only suggest starting fields — you can change every item, or choose Custom / Blank to create any type. Add a name, assign a location, and save. The asset and its checklist persist for all future months.',
+      },
+      {
+        q: 'What are the type tabs?',
+        a: 'The page shows a Setup / All tab for creating and managing assets, plus one tab for each asset type active in your org (for example Elevator or Fire Door). The Elevator tab can show this month’s Fire recall system and Communications phone status at a glance when you use that starter. Bookmark a tab with the ?type= URL parameter.',
+      },
+      {
+        q: 'Can I bulk-create assets from a spreadsheet?',
+        a: 'Yes. Owners and Admins can import a CSV with columns for name, assetType, locationName, recurrence, items (pipe-separated), and optional assetCode. If a locationName matches one in your org, the asset is assigned automatically. Unmatched names create unassigned assets you can edit afterward.',
+      },
+      {
+        q: 'What is Generate from Locations?',
+        a: 'Generate from Locations creates one asset per stairwell — or per floor under a stairwell — from your location tree for a selected optional starter. Useful when many stairwells need the same checklist without entering them one by one. Owner/Admin and Pro+ required.',
+      },
+      {
+        q: 'When should I use Forms & Walkthroughs instead?',
+        a: 'Use Forms & Walkthroughs when you are inspecting an area, route, building, process, or temporary project rather than keeping a permanent recurring record for one specific piece of equipment. Printable forms are available now.',
+      },
+      {
+        q: 'What plan is required?',
+        a: 'Equipment & Asset Inspections are available on Pro, Elite, and Enterprise plans with an active or trial subscription. Inspectors can inspect; Owner/Admin is required to create, edit, retire, import, or generate assets.',
+      },
+    ],
+  },
+] as const;
+
+export default function FaqPage() {
+  return (
+    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
+      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-3">
+          <HelpCircle className="h-7 w-7 text-red-600" />
+          <h1 className="text-2xl font-bold text-gray-900">FAQ</h1>
+        </div>
+        <p className="mt-2 text-sm text-gray-600">
+          Quick answers for setup, imports, inspections, AI assistance, and
+          day-to-day operations.
+        </p>
+      </div>
+
+      <div className="mt-6 space-y-6">
+        {faqSections.map((section) => (
+          <section
+            key={section.title}
+            className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
+          >
+            <h2 className="text-lg font-semibold text-gray-900">
+              {section.title}
+            </h2>
+            <dl className="mt-4 space-y-4">
+              {section.items.map((item) => (
+                <div
+                  key={item.q}
+                  className="rounded-lg border border-gray-100 bg-gray-50 p-4"
+                >
+                  <dt className="text-sm font-semibold text-gray-900">
+                    {item.q}
+                  </dt>
+                  <dd className="mt-2 text-sm text-gray-600">{item.a}</dd>
+                </div>
+              ))}
+            </dl>
+          </section>
+        ))}
+      </div>
+
+      <div className="mt-6 rounded-xl bg-gray-900 px-6 py-8 text-center">
+        <h2 className="text-xl font-bold text-white">
+          Need a step-by-step walkthrough?
+        </h2>
+        <p className="mt-2 text-sm text-gray-300">
+          Use Getting Started for the full flow from account setup to completed
+          inspections.
+        </p>
+        <div className="mt-5 flex flex-col items-center justify-center gap-3 sm:flex-row">
+          <Link
+            to="/dashboard/getting-started"
+            className="inline-flex rounded-lg bg-red-600 px-6 py-2.5 text-sm font-semibold text-white shadow hover:bg-red-700"
+          >
+            Open Getting Started
+          </Link>
+          <Link
+            to="/dashboard/workspaces"
+            className="inline-flex rounded-lg border border-gray-500 px-6 py-2.5 text-sm font-semibold text-white hover:bg-gray-800"
+          >
+            Go to inspections
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,564 @@
+import { onCall } from 'firebase-functions/v2/https';
+import {
+  Timestamp,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+} from 'firebase-admin/firestore';
+import { adminDb } from '../utils/admin.js';
+import { validateAuth } from '../utils/auth.js';
+import { validateMembership } from '../utils/membership.js';
+import { validateSubscription } from '../utils/subscription.js';
+import {
+  throwInvalidArgument,
+  throwPermissionDenied,
+} from '../utils/errors.js';
+
+type AiNoteStatus = 'open' | 'in_progress' | 'resolved';
+type AiMemoryIntentType =
+  | 'list_notes_by_month'
+  | 'list_notes_by_category'
+  | 'list_notes_by_asset'
+  | 'list_expiring_by_year'
+  | 'list_marked_expired'
+  | 'list_expired_candidates'
+  | 'count_replacements_by_month'
+  | 'get_extinguisher_inspection_status';
+
+interface MonthWindow {
+  year: number;
+  month: number;
+  startIso: string;
+  endIso: string;
+  label: string;
+}
+
+interface AiMemoryQueryIntent {
+  type: AiMemoryIntentType;
+  noteStatus?: AiNoteStatus;
+  noteCategory?: string;
+  monthWindow?: MonthWindow;
+  targetYear?: number;
+  assetQuery?: string;
+}
+
+interface QueryAiMemoryInput {
+  orgId: string;
+  intent: AiMemoryQueryIntent;
+}
+
+function toIso(value: unknown): string | null {
+  if (!value) return null;
+  if (value instanceof Timestamp) return value.toDate().toISOString();
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  }
+  if (value instanceof Date) return value.toISOString();
+  return null;
+}
+
+function parseMonthWindow(intent: AiMemoryQueryIntent): {
+  start: Date;
+  end: Date;
+} {
+  if (!intent.monthWindow) {
+    throwInvalidArgument('Intent month window is required.');
+  }
+  const start = new Date(intent.monthWindow.startIso);
+  const end = new Date(intent.monthWindow.endIso);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    throwInvalidArgument('Intent month window dates are invalid.');
+  }
+  if (start > end) {
+    throwInvalidArgument('Intent month window start must be before end.');
+  }
+  return { start, end };
+}
+
+function parseTargetYear(intent: AiMemoryQueryIntent): number {
+  if (!intent.targetYear || !Number.isInteger(intent.targetYear)) {
+    throwInvalidArgument('Intent target year is required.');
+  }
+  if (intent.targetYear < 2000 || intent.targetYear > 2300) {
+    throwInvalidArgument('Intent target year is out of range.');
+  }
+  return intent.targetYear;
+}
+
+function parseAssetQuery(intent: AiMemoryQueryIntent): string {
+  const value = intent.assetQuery?.trim();
+  if (!value) {
+    throwInvalidArgument('Intent assetQuery is required.');
+  }
+  return value;
+}
+
+function isActiveExtinguisher(data: DocumentData): boolean {
+  const ls = data.lifecycleStatus as string | null | undefined;
+  const category = data.category as string | null | undefined;
+  const status = data.status as string | null | undefined;
+  const isActive = data.isActive as boolean | null | undefined;
+  if (ls === 'replaced' || ls === 'retired' || ls === 'deleted') return false;
+  if (
+    category === 'replaced' ||
+    category === 'retired' ||
+    category === 'out_of_service'
+  )
+    return false;
+  if (status != null && status !== 'active') return false;
+  if (isActive === false) return false;
+  return ls === 'active' || ls == null || ls === '';
+}
+
+function stringOrEmpty(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+async function loadExtinguishersById(
+  orgId: string,
+  ids: string[],
+): Promise<Map<string, DocumentData>> {
+  const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+  const extinguisherById = new Map<string, DocumentData>();
+  if (uniqueIds.length === 0) return extinguisherById;
+
+  const refs = uniqueIds.map((id) =>
+    adminDb.doc(`org/${orgId}/extinguishers/${id}`),
+  );
+  const snaps = await adminDb.getAll(...refs);
+  snaps.forEach((snap, index) => {
+    if (snap.exists) {
+      extinguisherById.set(uniqueIds[index], snap.data() ?? {});
+    }
+  });
+  return extinguisherById;
+}
+
+function toExtinguisherResult(d: QueryDocumentSnapshot<DocumentData>) {
+  const data = d.data();
+  return {
+    id: d.id,
+    assetId: (data.assetId as string) ?? '',
+    serial: (data.serial as string) ?? '',
+    section: (data.section as string) ?? '',
+    parentLocation: (data.parentLocation as string) ?? '',
+    locationName: (data.locationName as string) ?? '',
+    vicinity: (data.vicinity as string) ?? '',
+    manufactureYear: (data.manufactureYear as number | null) ?? null,
+    expirationYear: (data.expirationYear as number | null) ?? null,
+    isExpired: data.isExpired === true,
+    lifecycleStatus: (data.lifecycleStatus as string | null) ?? null,
+    complianceStatus: (data.complianceStatus as string | null) ?? null,
+  };
+}
+
+function sortByLocationAndAsset<
+  T extends { parentLocation: string; section: string; assetId: string },
+>(rows: T[]): T[] {
+  return rows.sort((a, b) => {
+    const loc = `${a.parentLocation} ${a.section}`.localeCompare(
+      `${b.parentLocation} ${b.section}`,
+    );
+    if (loc !== 0) return loc;
+    return a.assetId.localeCompare(b.assetId, undefined, { numeric: true });
+  });
+}
+
+export const queryAiMemory = onCall<QueryAiMemoryInput>(async (request) => {
+  const { uid } = validateAuth(request);
+  const { orgId, intent } = request.data;
+
+  if (!orgId || typeof orgId !== 'string') {
+    throwInvalidArgument('Organization ID is required.');
+  }
+  if (!intent || typeof intent !== 'object') {
+    throwInvalidArgument('Intent is required.');
+  }
+
+  await validateMembership(orgId, uid, ['owner', 'admin', 'inspector']);
+  await validateSubscription(orgId);
+
+  const orgSnap = await adminDb.doc(`org/${orgId}`).get();
+  const orgData = orgSnap.data();
+  const plan = typeof orgData?.plan === 'string' ? orgData.plan : null;
+  const featureEnabled = orgData?.featureFlags?.aiAssistant === true;
+  const hasAiAssistant =
+    featureEnabled || ['pro', 'elite', 'enterprise'].includes(plan ?? '');
+  if (!hasAiAssistant) {
+    throwPermissionDenied('AI assistant is not enabled for this organization.');
+  }
+
+  if (intent.type === 'list_notes_by_month') {
+    const { start, end } = parseMonthWindow(intent);
+    const baseQuery = adminDb
+      .collection(`org/${orgId}/aiNotes`)
+      .where('createdAt', '>=', Timestamp.fromDate(start))
+      .where('createdAt', '<=', Timestamp.fromDate(end))
+      .orderBy('createdAt', 'desc')
+      .limit(200);
+    const snap =
+      intent.noteStatus &&
+      ['open', 'in_progress', 'resolved'].includes(intent.noteStatus)
+        ? await baseQuery.where('status', '==', intent.noteStatus).get()
+        : await baseQuery.get();
+
+    const notes = snap.docs.map((d) => {
+      const data = d.data();
+      return {
+        id: d.id,
+        title: (data.title as string | null) ?? null,
+        content: (data.content as string) ?? '',
+        status: (data.status as AiNoteStatus) ?? 'open',
+        source: (data.source as 'manual' | 'ai_suggested') ?? 'manual',
+        createdAt: toIso(data.createdAt),
+        updatedAt: toIso(data.updatedAt),
+        createdByEmail: (data.createdByEmail as string | null) ?? null,
+      };
+    });
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        monthLabel: intent.monthWindow?.label ?? '',
+        startIso: start.toISOString(),
+        endIso: end.toISOString(),
+        status: intent.noteStatus ?? null,
+      },
+      count: notes.length,
+      notes,
+    };
+  }
+
+  if (intent.type === 'list_notes_by_category') {
+    const category = intent.noteCategory?.trim();
+    if (!category) {
+      throwInvalidArgument('Note category is required.');
+    }
+    const snap = await adminDb
+      .collection(`org/${orgId}/aiNotes`)
+      .where('category', '==', category)
+      .orderBy('updatedAt', 'desc')
+      .limit(200)
+      .get();
+
+    const notes = snap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          title: (data.title as string | null) ?? null,
+          content: (data.content as string) ?? '',
+          status: (data.status as AiNoteStatus) ?? 'open',
+          source: (data.source as 'manual' | 'ai_suggested') ?? 'manual',
+          createdAt: toIso(data.createdAt),
+          updatedAt: toIso(data.updatedAt),
+          createdByEmail: (data.createdByEmail as string | null) ?? null,
+        };
+      })
+      .filter((note) => {
+        if (!intent.noteStatus) return true;
+        return note.status === intent.noteStatus;
+      });
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        category,
+        status: intent.noteStatus ?? null,
+      },
+      count: notes.length,
+      notes,
+    };
+  }
+
+  if (intent.type === 'list_notes_by_asset') {
+    const assetQuery = intent.assetQuery?.trim().toUpperCase();
+    if (!assetQuery) {
+      throwInvalidArgument('Asset query is required.');
+    }
+    const snap = await adminDb
+      .collection(`org/${orgId}/aiNotes`)
+      .orderBy('updatedAt', 'desc')
+      .limit(200)
+      .get();
+
+    const notes = snap.docs
+      .map((d) => {
+        const data = d.data();
+        return {
+          id: d.id,
+          title: (data.title as string | null) ?? null,
+          content: (data.content as string) ?? '',
+          status: (data.status as AiNoteStatus) ?? 'open',
+          source: (data.source as 'manual' | 'ai_suggested') ?? 'manual',
+          createdAt: toIso(data.createdAt),
+          updatedAt: toIso(data.updatedAt),
+          createdByEmail: (data.createdByEmail as string | null) ?? null,
+          relatedEntityLabel:
+            (data.relatedEntityLabel as string | null) ?? null,
+        };
+      })
+      .filter((note) => {
+        if (note.relatedEntityLabel?.toUpperCase() === assetQuery) return true;
+        return note.content.toUpperCase().includes(assetQuery);
+      })
+      .filter((note) => {
+        if (!intent.noteStatus) return true;
+        return note.status === intent.noteStatus;
+      });
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        assetQuery,
+        status: intent.noteStatus ?? null,
+      },
+      count: notes.length,
+      notes,
+    };
+  }
+
+  if (intent.type === 'list_expiring_by_year') {
+    const targetYear = parseTargetYear(intent);
+    const snap = await adminDb
+      .collection(`org/${orgId}/extinguishers`)
+      .where('deletedAt', '==', null)
+      .where('expirationYear', '==', targetYear)
+      .orderBy('assetId', 'asc')
+      .limit(500)
+      .get();
+
+    const expiringExtinguishers = snap.docs
+      .map(toExtinguisherResult)
+      .filter((ext) => ext.lifecycleStatus !== 'deleted');
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        expirationYear: targetYear,
+        deletedAtIsNull: true,
+      },
+      count: expiringExtinguishers.length,
+      expiringExtinguishers,
+    };
+  }
+
+  if (intent.type === 'list_marked_expired') {
+    const snap = await adminDb
+      .collection(`org/${orgId}/extinguishers`)
+      .where('deletedAt', '==', null)
+      .where('isExpired', '==', true)
+      .limit(1000)
+      .get();
+
+    const expiredExtinguishers = sortByLocationAndAsset(
+      snap.docs.map(toExtinguisherResult).filter((ext, idx) => {
+        const data = snap.docs[idx].data();
+        return isActiveExtinguisher(data) && ext.isExpired;
+      }),
+    );
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        isExpired: true,
+        activeInventoryOnly: true,
+        deletedAtIsNull: true,
+      },
+      count: expiredExtinguishers.length,
+      expiredExtinguishers,
+    };
+  }
+
+  if (intent.type === 'list_expired_candidates') {
+    const currentYear = new Date().getUTCFullYear();
+    const cutoffManufactureYear = currentYear - 6;
+    const snap = await adminDb
+      .collection(`org/${orgId}/extinguishers`)
+      .where('deletedAt', '==', null)
+      .limit(2000)
+      .get();
+
+    const expiredCandidateExtinguishers = sortByLocationAndAsset(
+      snap.docs
+        .filter((d) => {
+          const data = d.data();
+          const manufactureYear = data.manufactureYear as
+            | number
+            | null
+            | undefined;
+          return (
+            isActiveExtinguisher(data) &&
+            data.isExpired !== true &&
+            typeof manufactureYear === 'number' &&
+            manufactureYear <= cutoffManufactureYear
+          );
+        })
+        .map(toExtinguisherResult),
+    );
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        manufactureYearLte: cutoffManufactureYear,
+        isExpired: false,
+        activeInventoryOnly: true,
+        deletedAtIsNull: true,
+        advisoryOnly: true,
+      },
+      count: expiredCandidateExtinguishers.length,
+      expiredCandidateExtinguishers,
+    };
+  }
+
+  if (intent.type === 'count_replacements_by_month') {
+    const { start, end } = parseMonthWindow(intent);
+    const snap = await adminDb
+      .collection(`org/${orgId}/auditLogs`)
+      .where('action', '==', 'extinguisher.replaced')
+      .where('performedAt', '>=', Timestamp.fromDate(start))
+      .where('performedAt', '<=', Timestamp.fromDate(end))
+      .orderBy('performedAt', 'desc')
+      .limit(500)
+      .get();
+
+    const replacementEvents = snap.docs.map((d) => {
+      const data = d.data();
+      const details =
+        (data.details as Record<string, unknown> | undefined) ?? {};
+      return {
+        id: d.id,
+        performedAt: toIso(data.performedAt),
+        performedByEmail: (data.performedByEmail as string | null) ?? null,
+        oldAssetId: (details.oldAssetId as string | null) ?? null,
+        newAssetId: (details.newAssetId as string | null) ?? null,
+        oldExtinguisherId: (details.oldExtinguisherId as string | null) ?? null,
+        newExtinguisherId: (details.newExtinguisherId as string | null) ?? null,
+        reason: (details.reason as string | null) ?? null,
+      };
+    });
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        monthLabel: intent.monthWindow?.label ?? '',
+        startIso: start.toISOString(),
+        endIso: end.toISOString(),
+        action: 'extinguisher.replaced',
+      },
+      count: replacementEvents.length,
+      replacementEvents,
+    };
+  }
+
+  if (intent.type === 'get_extinguisher_inspection_status') {
+    const assetQuery = parseAssetQuery(intent);
+    const workspacesSnap = await adminDb
+      .collection(`org/${orgId}/workspaces`)
+      .where('status', '==', 'active')
+      .get();
+    if (workspacesSnap.empty) {
+      return {
+        intentType: intent.type,
+        appliedFilters: {
+          assetQuery,
+          activeWorkspaceId: null,
+        },
+        count: 0,
+        inspectionStatusMatches: [],
+      };
+    }
+
+    const activeWorkspace = workspacesSnap.docs
+      .map((d) => ({
+        id: d.id,
+        ...(d.data() as { label?: string; monthYear?: string }),
+      }))
+      .sort((a, b) => (b.monthYear ?? '').localeCompare(a.monthYear ?? ''))[0];
+    const workspaceId = activeWorkspace?.id ?? null;
+    const workspaceLabel = activeWorkspace?.label ?? null;
+
+    if (!workspaceId) {
+      return {
+        intentType: intent.type,
+        appliedFilters: {
+          assetQuery,
+          activeWorkspaceId: null,
+        },
+        count: 0,
+        inspectionStatusMatches: [],
+      };
+    }
+
+    const exactSnap = await adminDb
+      .collection(`org/${orgId}/inspections`)
+      .where('workspaceId', '==', workspaceId)
+      .where('assetId', '==', assetQuery)
+      .limit(50)
+      .get();
+
+    const fallbackSnap = exactSnap.empty
+      ? await adminDb
+          .collection(`org/${orgId}/inspections`)
+          .where('workspaceId', '==', workspaceId)
+          .limit(2000)
+          .get()
+      : null;
+
+    const sourceDocs = exactSnap.empty
+      ? (fallbackSnap?.docs ?? []).filter((d) =>
+          String((d.data().assetId as string) ?? '')
+            .toLowerCase()
+            .includes(assetQuery.toLowerCase()),
+        )
+      : exactSnap.docs;
+
+    const extinguisherById = await loadExtinguishersById(
+      orgId,
+      sourceDocs.map((d) => stringOrEmpty(d.data().extinguisherId)),
+    );
+
+    const inspectionStatusMatches = sourceDocs.map((d) => {
+      const data = d.data();
+      const extinguisher = extinguisherById.get(
+        stringOrEmpty(data.extinguisherId),
+      );
+      return {
+        inspectionId: d.id,
+        extinguisherId: stringOrEmpty(data.extinguisherId),
+        assetId: stringOrEmpty(data.assetId),
+        serial:
+          stringOrEmpty(data.serial) || stringOrEmpty(extinguisher?.serial),
+        parentLocation:
+          stringOrEmpty(data.parentLocation) ||
+          stringOrEmpty(extinguisher?.parentLocation),
+        locationName:
+          stringOrEmpty(data.locationName) ||
+          stringOrEmpty(extinguisher?.locationName),
+        vicinity:
+          stringOrEmpty(data.vicinity) || stringOrEmpty(extinguisher?.vicinity),
+        status: (data.status as string) ?? 'pending',
+        section:
+          stringOrEmpty(data.section) || stringOrEmpty(extinguisher?.section),
+        workspaceId,
+        workspaceLabel,
+        inspectedAt: toIso(data.inspectedAt),
+        inspectedByEmail: (data.inspectedByEmail as string | null) ?? null,
+        notes: (data.notes as string) ?? '',
+      };
+    });
+
+    return {
+      intentType: intent.type,
+      appliedFilters: {
+        assetQuery,
+        activeWorkspaceId: workspaceId,
+        activeWorkspaceLabel: workspaceLabel,
+      },
+      count: inspectionStatusMatches.length,
+      inspectionStatusMatches,
+    };
+  }
+
+  throwInvalidArgument('Unsupported intent type.');
+});

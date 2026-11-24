@@ -1,0 +1,581 @@
+/**
+ * AI service for ExtinguisherTracker.
+ * Uses Vertex AI (Gemini) via Firebase for compliance assistance,
+ * inventory insights, and NFPA 10 guidance.
+ *
+ * Author: built_by_Beck
+ */
+
+import { geminiModel } from '../lib/firebase.ts';
+import type { Extinguisher } from './extinguisherService.ts';
+import type { Inspection } from './inspectionService.ts';
+import type { SectionNotesMap } from './workspaceService.ts';
+import type { NfpaEdition } from '../types/organization.ts';
+import { APP_KNOWLEDGE_BASE } from '../lib/aiKnowledgeBase.ts';
+import { parseAiMemoryIntent } from './aiQueryIntentService.ts';
+import { queryAiMemoryCall } from './aiQueryService.ts';
+import { parseAiExtinguisherStatusChangeIntent } from './aiStatusChangeIntentService.ts';
+import {
+  updateExtinguisherStatus,
+  type UpdateExtinguisherStatusResult,
+} from './lifecycleService.ts';
+import type {
+  AiMemoryExpiringExtinguisher,
+  AiMemoryInspectionStatusMatch,
+  AiMemoryNoteResult,
+  AiMemoryQueryResponse,
+  AiMemoryReplacementEvent,
+} from '../types/aiQuery.ts';
+
+const SYSTEM_PROMPT = `You are the ExtinguisherTracker AI Assistant, built by Beck-Publishing.
+You are an expert in NFPA 10 (Standard for Portable Fire Extinguishers) compliance,
+fire extinguisher inspection, maintenance, and lifecycle management.
+
+Your role:
+- Answer questions about NFPA 10 compliance requirements
+- Analyze extinguisher inventory data and flag issues
+- Suggest maintenance actions and inspection priorities
+- Explain compliance statuses and what they mean
+- Help users understand inspection schedules (monthly, annual, 6-year, hydrostatic)
+- Provide guidance on extinguisher categories, types, and placement
+- Help users navigate and use the ExtinguisherTracker app itself (using the App Knowledge Base below).
+
+Rules:
+- Be concise and practical — users are busy inspectors and facility managers
+- When analyzing data, reference specific extinguisher asset IDs
+- When listing extinguishers, include asset number, serial number, location, and vicinity for every listed extinguisher
+- Cite the organization's selected NFPA 10 reference when relevant
+- If you don't know something, say so — don't guess on safety-critical info
+- Do not present app guidance as a legal compliance guarantee; defer final decisions to the adopted local code, qualified judgment, and AHJ direction
+- Never suggest skipping required inspections or maintenance
+- Format responses with markdown for readability
+
+${APP_KNOWLEDGE_BASE}`;
+
+export interface AiMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  imageAttachments?: AiImageAttachment[];
+}
+
+export interface AiImageAttachment {
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  data: string;
+  name?: string;
+  size?: number;
+}
+
+function formatNfpaReference(
+  edition?: NfpaEdition,
+  customLabel?: string,
+): string {
+  if (edition === 'other') {
+    return customLabel?.trim() || 'Other / AHJ-specific NFPA 10 reference';
+  }
+  return `NFPA 10 (${edition ?? '2022'})`;
+}
+
+/**
+ * Send a message to the AI assistant with optional inventory context.
+ */
+export async function askAssistant(
+  messages: AiMessage[],
+  context?: {
+    orgId?: string;
+    orgName?: string;
+    extinguishers?: Extinguisher[];
+    complianceSummary?: Record<string, number>;
+    activeWorkspaceId?: string | null;
+    activeWorkspaceLabel?: string | null;
+    inspections?: Inspection[];
+    sectionNotes?: SectionNotesMap;
+    nfpaEdition?: NfpaEdition;
+    nfpaEditionLabel?: string;
+    localComplianceNotes?: string;
+    /** Owner/admin: allows deterministic extinguisher status updates from chat. */
+    canMutateInventory?: boolean;
+  },
+): Promise<string> {
+  const lastMessage = messages[messages.length - 1];
+  const latestImageAttachments = lastMessage.imageAttachments ?? [];
+  const hasImageAttachment = latestImageAttachments.length > 0;
+
+  if (
+    !hasImageAttachment &&
+    /\borganize\b/.test(lastMessage.content.toLowerCase()) &&
+    /\bnotes?\b/.test(lastMessage.content.toLowerCase())
+  ) {
+    return [
+      'Open the **Notes** tab to review all floor-walk notes.',
+      'Click **Analyze notes** for AI recommendations on categorizing, grouping, and closing related notes.',
+      'You can also say **Take a note that ...** anytime while walking the floor.',
+    ].join('\n\n');
+  }
+
+  const orgIdForStatus =
+    context?.orgId && context?.canMutateInventory && !hasImageAttachment
+      ? context.orgId
+      : null;
+  const statusChangeIntent = orgIdForStatus
+    ? parseAiExtinguisherStatusChangeIntent(lastMessage.content)
+    : null;
+  if (statusChangeIntent && orgIdForStatus) {
+    try {
+      const result = await updateExtinguisherStatus(orgIdForStatus, {
+        extinguisherId: statusChangeIntent.extinguisherId,
+        assetId: statusChangeIntent.assetId,
+        newStatus: statusChangeIntent.newStatus,
+        reason: 'AI assistant user request',
+      });
+      return formatAiStatusChangeResponse(result);
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : typeof err === 'object' &&
+              err &&
+              'message' in err &&
+              typeof (err as { message: unknown }).message === 'string'
+            ? (err as { message: string }).message
+            : 'Could not update extinguisher status.';
+      return `I could not update the extinguisher status: **${msg}**\n\nIf this is a permissions issue, only **owners** and **admins** can change lifecycle status. You can also change status from the extinguisher detail page.`;
+    }
+  }
+
+  const intent = parseAiMemoryIntent(lastMessage.content);
+  if (context?.orgId && intent && !hasImageAttachment) {
+    try {
+      const result = await queryAiMemoryCall({ orgId: context.orgId, intent });
+      return formatDeterministicMemoryResponse(result);
+    } catch (err) {
+      // Continue to conversational fallback on deterministic query failures.
+      console.warn(
+        'Deterministic memory query failed. Falling back to Gemini.',
+        err,
+      );
+    }
+  }
+
+  // Build context block from org data
+  let contextBlock = '';
+  if (context) {
+    const parts: string[] = [];
+    if (context.orgName) {
+      parts.push(`Organization: ${context.orgName}`);
+    }
+    parts.push(
+      `Selected compliance reference: ${formatNfpaReference(context.nfpaEdition, context.nfpaEditionLabel)}`,
+    );
+    if (context.localComplianceNotes?.trim()) {
+      parts.push(
+        `Local AHJ / internal policy notes: ${context.localComplianceNotes.trim()}`,
+      );
+    }
+    if (context.complianceSummary) {
+      parts.push(
+        `Compliance Summary: ${JSON.stringify(context.complianceSummary)}`,
+      );
+    }
+    if (context.activeWorkspaceId || context.activeWorkspaceLabel) {
+      parts.push(
+        `Active Workspace: ${context.activeWorkspaceLabel ?? 'unknown'} (${context.activeWorkspaceId ?? 'no-id'})`,
+      );
+    }
+    if (context.extinguishers && context.extinguishers.length > 0) {
+      // Send a summary, not all fields — keep token count reasonable
+      const summary = context.extinguishers.slice(0, 50).map((e) => ({
+        assetId: e.assetId,
+        serial: e.serial,
+        parentLocation: e.parentLocation,
+        locationName: (e as Extinguisher & { locationName?: string })
+          .locationName,
+        vicinity: e.vicinity,
+        category: e.category,
+        extinguisherType: e.extinguisherType,
+        section: e.section,
+        complianceStatus: e.complianceStatus,
+        lifecycleStatus: e.lifecycleStatus,
+        manufactureYear: e.manufactureYear,
+        expirationYear: e.expirationYear,
+        isExpired: e.isExpired,
+        lastMonthlyInspection: e.lastMonthlyInspection,
+        lastAnnualInspection: e.lastAnnualInspection,
+        nextMonthlyInspection: e.nextMonthlyInspection,
+        nextAnnualInspection: e.nextAnnualInspection,
+        nextSixYearMaintenance: e.nextSixYearMaintenance,
+        nextHydroTest: e.nextHydroTest,
+        manufactureDate: e.manufactureDate,
+      }));
+      parts.push(
+        `Inventory (${context.extinguishers.length} total, showing first ${summary.length}):\n${JSON.stringify(summary, null, 2)}`,
+      );
+    }
+    if (context.inspections && context.inspections.length > 0) {
+      const inspectionSummary = context.inspections.slice(0, 300).map((i) => ({
+        assetId: i.assetId,
+        extinguisherId: i.extinguisherId,
+        serial: i.serial,
+        parentLocation: i.parentLocation,
+        locationName: i.locationName,
+        status: i.status,
+        locationId: i.locationId,
+        section: i.section,
+        inspectedByEmail: i.inspectedByEmail,
+        inspectedAt: i.inspectedAt ?? null,
+        notes: i.notes ?? '',
+      }));
+      parts.push(
+        `Inspection status context (${context.inspections.length} total in active workspace, showing first ${inspectionSummary.length}):\n${JSON.stringify(
+          inspectionSummary,
+          null,
+          2,
+        )}`,
+      );
+    }
+    if (context.sectionNotes && Object.keys(context.sectionNotes).length > 0) {
+      const notesSummary = Object.entries(context.sectionNotes).map(
+        ([section, value]) => ({
+          section,
+          notes: value.notes,
+          saveForNextMonth: value.saveForNextMonth,
+          lastUpdated: value.lastUpdated,
+        }),
+      );
+      parts.push(
+        `Section notes context (${notesSummary.length} total):\n${JSON.stringify(notesSummary, null, 2)}`,
+      );
+    }
+    if (parts.length > 0) {
+      contextBlock = `\n\nCurrent organization data:\n${parts.join('\n\n')}`;
+    }
+  }
+
+  // Build conversation for Gemini
+  const fullPrompt = SYSTEM_PROMPT + contextBlock;
+
+  // Convert message history to Gemini content format
+  const history = messages.slice(0, -1).map((m) => ({
+    role: m.role === 'user' ? ('user' as const) : ('model' as const),
+    parts: [{ text: m.content }],
+  }));
+
+  const chat = geminiModel.startChat({
+    history: [
+      { role: 'user', parts: [{ text: 'System context: ' + fullPrompt }] },
+      {
+        role: 'model',
+        parts: [
+          {
+            text: "Understood. I'm the ExtinguisherTracker AI Assistant by Beck-Publishing. I'm ready to help with NFPA 10 compliance, inspection guidance, and inventory analysis. How can I help?",
+          },
+        ],
+      },
+      ...history,
+    ],
+  });
+
+  const messageParts = hasImageAttachment
+    ? [
+        {
+          text: [
+            lastMessage.content,
+            '',
+            'The user attached an image for this question. Analyze only what is visible in the image and do not claim that the image was stored.',
+          ].join('\n'),
+        },
+        ...latestImageAttachments.map((image) => ({
+          inlineData: {
+            mimeType: image.mimeType,
+            data: image.data,
+          },
+        })),
+      ]
+    : lastMessage.content;
+
+  const result = await chat.sendMessage(messageParts);
+  return result.response.text();
+}
+
+function formatAiStatusChangeResponse(
+  result: UpdateExtinguisherStatusResult,
+): string {
+  const label = result.newStatus.replace(/_/g, ' ');
+  if (result.unchanged) {
+    return `**${result.assetId || result.extinguisherId}** is already **${label}** — no database change was needed.`;
+  }
+  return [
+    `Updated extinguisher **${result.assetId || '(no asset #)'}** (record id \`${result.extinguisherId}\`) to **${label}**.`,
+    '',
+    'If due dates or compliance look wrong after this correction, open the extinguisher in Inventory and use **Edit** → save, or ask an admin to run lifecycle recalculation from the app.',
+  ].join('\n');
+}
+
+function formatDeterministicMemoryResponse(
+  result: AiMemoryQueryResponse,
+): string {
+  const filters = Object.entries(result.appliedFilters)
+    .map(([k, v]) => `- ${k}: ${v === null ? 'none' : String(v)}`)
+    .join('\n');
+
+  if (result.intentType === 'list_notes_by_month') {
+    return formatNotesResult(result.count, filters, result.notes ?? []);
+  }
+  if (
+    result.intentType === 'list_notes_by_category' ||
+    result.intentType === 'list_notes_by_asset'
+  ) {
+    return formatNotesResult(result.count, filters, result.notes ?? []);
+  }
+  if (result.intentType === 'list_expiring_by_year') {
+    return formatExpiringResult(
+      result.count,
+      filters,
+      result.expiringExtinguishers ?? [],
+    );
+  }
+  if (result.intentType === 'list_marked_expired') {
+    return formatMarkedExpiredResult(
+      result.count,
+      filters,
+      result.expiredExtinguishers ?? [],
+    );
+  }
+  if (result.intentType === 'list_expired_candidates') {
+    return formatExpiredCandidatesResult(
+      result.count,
+      filters,
+      result.expiredCandidateExtinguishers ?? [],
+    );
+  }
+  if (result.intentType === 'get_extinguisher_inspection_status') {
+    return formatInspectionStatusResult(
+      result.count,
+      filters,
+      result.inspectionStatusMatches ?? [],
+    );
+  }
+  return formatReplacementResult(
+    result.count,
+    filters,
+    result.replacementEvents ?? [],
+  );
+}
+
+function formatNotesResult(
+  count: number,
+  filters: string,
+  notes: AiMemoryNoteResult[],
+): string {
+  const items = notes.slice(0, 10).map((note) => {
+    const created = note.createdAt
+      ? new Date(note.createdAt).toLocaleDateString()
+      : 'unknown date';
+    return `- ${created} | ${note.status} | ${note.content}`;
+  });
+
+  return [
+    '### Notes query result',
+    `Found **${count}** note(s).`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Top matches**'
+      : '**Top matches**\n- No notes matched this filter window.',
+    ...items,
+    '',
+    '_If you meant a different month or only open/resolved notes, tell me and I will rerun it._',
+  ].join('\n');
+}
+
+type FinderDetails = Pick<
+  AiMemoryExpiringExtinguisher,
+  | 'assetId'
+  | 'serial'
+  | 'parentLocation'
+  | 'locationName'
+  | 'section'
+  | 'vicinity'
+>;
+
+function displayField(
+  value: string | null | undefined,
+  fallback = '--',
+): string {
+  return value?.trim() || fallback;
+}
+
+function formatFinderDetails(row: FinderDetails): string {
+  const location = displayField(
+    row.parentLocation || row.locationName,
+    'unassigned',
+  );
+  return [
+    `asset number: ${displayField(row.assetId)}`,
+    `serial number: ${displayField(row.serial, 'no serial')}`,
+    `location: ${location}`,
+    `section: ${displayField(row.section)}`,
+    `vicinity: ${displayField(row.vicinity)}`,
+  ].join(' | ');
+}
+
+function formatExpiringResult(
+  count: number,
+  filters: string,
+  extinguishers: AiMemoryExpiringExtinguisher[],
+): string {
+  const items = extinguishers.slice(0, 20).map((ext) => {
+    return `- ${formatFinderDetails(ext)} | status: ${ext.lifecycleStatus ?? 'unknown'}`;
+  });
+
+  return [
+    '### Expiration query result',
+    `Found **${count}** extinguisher(s) matching the expiration filter.`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Top matches**'
+      : '**Top matches**\n- No extinguishers matched this year.',
+    ...items,
+    '',
+    '_If you want this grouped by location or exported, ask and I can format it._',
+  ].join('\n');
+}
+
+function formatMarkedExpiredResult(
+  count: number,
+  filters: string,
+  extinguishers: AiMemoryExpiringExtinguisher[],
+): string {
+  const items = extinguishers.map((ext) => {
+    const mfg =
+      ext.manufactureYear != null ? ` | mfg: ${ext.manufactureYear}` : '';
+    const exp =
+      ext.expirationYear != null ? ` | exp: ${ext.expirationYear}` : '';
+    return `- ${formatFinderDetails(ext)}${mfg}${exp}`;
+  });
+
+  return [
+    '### Marked expired extinguishers',
+    `Found **${count}** extinguisher(s) marked expired.`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Printable list**'
+      : '**Printable list**\n- No extinguishers are marked expired.',
+    ...items,
+    '',
+    '_This official replacement list only includes units where the expired checkbox has been saved. Possible candidates are separate; ask for possible expired candidates if you want that advisory list too._',
+  ].join('\n');
+}
+
+function formatExpiredCandidatesResult(
+  count: number,
+  filters: string,
+  extinguishers: AiMemoryExpiringExtinguisher[],
+): string {
+  const items = extinguishers.map((ext) => {
+    return `- ${formatFinderDetails(ext)} | mfg: ${ext.manufactureYear ?? 'unknown'}`;
+  });
+
+  return [
+    '### Possible expired candidates',
+    `Found **${count}** active extinguisher(s) manufactured 6+ years ago that are not marked expired.`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Candidate list**'
+      : '**Candidate list**\n- No possible candidates matched this rule.',
+    ...items,
+    '',
+    '_This is not the official expired list. It is only a follow-up list to help catch units someone may have forgotten to mark expired._',
+  ].join('\n');
+}
+
+function formatReplacementResult(
+  count: number,
+  filters: string,
+  replacementEvents: AiMemoryReplacementEvent[],
+): string {
+  const items = replacementEvents.slice(0, 20).map((event) => {
+    const date = event.performedAt
+      ? new Date(event.performedAt).toLocaleDateString()
+      : 'unknown date';
+    const oldAsset = event.oldAssetId ?? 'unknown old asset';
+    const newAsset = event.newAssetId ?? 'unknown new asset';
+    return `- ${date} | ${oldAsset} -> ${newAsset}`;
+  });
+
+  return [
+    '### Replacement query result',
+    `Total replaced in window: **${count}**`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Recent replacement events**'
+      : '**Recent replacement events**\n- No replacements were logged in this window.',
+    ...items,
+    '',
+    '_If you want only one building/section, ask with that location and month._',
+  ].join('\n');
+}
+
+function formatInspectionStatusResult(
+  count: number,
+  filters: string,
+  matches: AiMemoryInspectionStatusMatch[],
+): string {
+  const items = matches.slice(0, 20).map((row) => {
+    const checked =
+      row.status === 'pending'
+        ? 'Not yet inspected'
+        : `Checked (${row.status.toUpperCase()})`;
+    const inspectedWhen = row.inspectedAt
+      ? new Date(row.inspectedAt).toLocaleString()
+      : 'not inspected yet';
+    const noteSuffix = row.notes ? ` | note: ${row.notes}` : '';
+    return `- ${formatFinderDetails(row)} | ${checked} | ${inspectedWhen}${noteSuffix}`;
+  });
+
+  return [
+    '### Extinguisher inspection status',
+    `Found **${count}** matching inspection record(s).`,
+    '',
+    '**Applied filters**',
+    filters,
+    '',
+    items.length > 0
+      ? '**Matches**'
+      : '**Matches**\n- No matching extinguisher inspection was found in the active workspace.',
+    ...items,
+  ].join('\n');
+}
+
+/**
+ * Get a quick AI insight about the current compliance state.
+ * Used for the dashboard insights card.
+ */
+export async function getComplianceInsight(
+  complianceSummary: Record<string, number>,
+  orgName: string,
+): Promise<string> {
+  const prompt = `Given this compliance summary for "${orgName}":
+${JSON.stringify(complianceSummary, null, 2)}
+
+Provide a brief 2-3 sentence insight about the organization's compliance health.
+Focus on the most urgent items. Be direct and actionable. No markdown headers.`;
+
+  const result = await geminiModel.generateContent(
+    SYSTEM_PROMPT + '\n\n' + prompt,
+  );
+  return result.response.text();
+}

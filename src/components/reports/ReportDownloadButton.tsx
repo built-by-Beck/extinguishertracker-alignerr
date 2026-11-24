@@ -1,0 +1,103 @@
+/**
+ * ReportDownloadButton — triggers on-demand report generation and downloads the file.
+ * Shows a loading spinner while the Cloud Function is executing, then opens the URL in a new tab.
+ *
+ * Author: built_by_Beck
+ */
+
+import { useState, useEffect } from 'react';
+import { FileSpreadsheet, FileText, FileJson, Loader2 } from 'lucide-react';
+import { generateReportDownload } from '../../services/reportService.ts';
+import { useOrg } from '../../hooks/useOrg.ts';
+import type { ReportFormat } from '../../types/report.ts';
+
+interface ReportDownloadButtonProps {
+  orgId: string;
+  workspaceId: string;
+  format: ReportFormat;
+  label?: string;
+}
+
+const FORMAT_ICON: Record<ReportFormat, typeof FileText> = {
+  csv: FileSpreadsheet,
+  pdf: FileText,
+  json: FileJson,
+};
+
+const FORMAT_LABEL: Record<ReportFormat, string> = {
+  csv: 'CSV',
+  pdf: 'PDF',
+  json: 'JSON',
+};
+
+export function ReportDownloadButton({
+  orgId,
+  workspaceId,
+  format,
+  label,
+}: ReportDownloadButtonProps) {
+  const [loading, setLoading] = useState(false);
+  const { org } = useOrg();
+  const reportsPaused = org?.overLimit === true;
+  const [error, setError] = useState<string | null>(null);
+
+  // Auto-clear error after 5 seconds
+  useEffect(() => {
+    if (!error) return;
+    const timer = setTimeout(() => setError(null), 5000);
+    return () => clearTimeout(timer);
+  }, [error]);
+
+  const Icon = FORMAT_ICON[format];
+  const displayLabel = label ?? FORMAT_LABEL[format];
+
+  async function handleClick() {
+    if (loading) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const { downloadUrl } = await generateReportDownload(
+        orgId,
+        workspaceId,
+        format,
+      );
+      window.open(downloadUrl, '_blank');
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to generate report.';
+      setError(message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div className="inline-flex flex-col items-start gap-1">
+      <button
+        onClick={handleClick}
+        disabled={loading || reportsPaused}
+        title={
+          reportsPaused
+            ? 'Reports are paused while you are over your plan asset limit.'
+            : undefined
+        }
+        className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 shadow-sm transition-colors hover:bg-gray-50 hover:border-gray-400 disabled:cursor-not-allowed disabled:opacity-60"
+      >
+        <span className="relative h-4 w-4 shrink-0" aria-hidden="true">
+          <Icon
+            className={`absolute inset-0 h-4 w-4 transition-opacity ${
+              loading ? 'opacity-0' : 'opacity-100'
+            }`}
+          />
+          <Loader2
+            className={`absolute inset-0 h-4 w-4 animate-spin transition-opacity ${
+              loading ? 'opacity-100' : 'opacity-0'
+            }`}
+          />
+        </span>
+        <span>{displayLabel}</span>
+      </button>
+      {error && <p className="text-xs text-red-600">{error}</p>}
+    </div>
+  );
+}

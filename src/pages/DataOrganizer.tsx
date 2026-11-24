@@ -1,0 +1,1088 @@
+/**
+ * Data Organizer Page
+ * Helps users fix incomplete imported data.
+ * Route: /dashboard/data-organizer
+ */
+
+import { useState, useEffect, useMemo } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Loader2,
+  AlertTriangle,
+  Save,
+  CheckSquare,
+  Wrench,
+  Download,
+  FileSpreadsheet,
+  HelpCircle,
+  RefreshCw,
+} from 'lucide-react';
+import { httpsCallable } from 'firebase/functions';
+import { useAuth } from '../hooks/useAuth.ts';
+import { useOrg } from '../hooks/useOrg.ts';
+import { functions } from '../lib/firebase.ts';
+import {
+  subscribeToExtinguishers,
+  updateExtinguisher,
+  batchUpdateExtinguishers,
+  type Extinguisher,
+} from '../services/extinguisherService.ts';
+import {
+  subscribeToLocations,
+  createLocation,
+  normalizeLocationName,
+  updateLocation,
+  softDeleteLocation,
+  deriveLocationFields,
+  getLocationPath,
+  type Location,
+} from '../services/locationService.ts';
+import {
+  DetailedLocationPicker,
+  type DetailedLocationValue,
+} from '../components/locations/DetailedLocationPicker.tsx';
+import {
+  parseFloorFromText,
+  floorSortRank,
+  normalizeFloorLabel,
+} from '../utils/floorParsing.ts';
+import { planFloorLocationCleanup } from '../utils/planFloorLocationCleanup.ts';
+
+const EXTINGUISHER_TYPES = [
+  'ABC Dry Chemical',
+  'BC Dry Chemical',
+  'CO2',
+  'Water',
+  'Water Mist',
+  'Foam',
+  'Halotron',
+  'Purple K',
+  'Clean Agent',
+  'Wet Chemical',
+  'Dry Powder (Class D)',
+];
+
+const EXTINGUISHER_SIZES = [
+  '2.5 lb',
+  '5 lb',
+  '10 lb',
+  '20 lb',
+  '30 lb',
+  'Other',
+];
+
+function getIssues(ext: Extinguisher): string[] {
+  const issues: string[] = [];
+  if (!ext.locationId && !ext.parentLocation) issues.push('No location');
+  if (!(ext.floor ?? '').trim()) issues.push('No floor');
+  if (!ext.serial) issues.push('No serial');
+  if (!ext.extinguisherType) issues.push('No type');
+  if (!ext.manufactureYear) issues.push('No year');
+  if (!ext.extinguisherSize) issues.push('No size');
+  return issues;
+}
+
+export default function DataOrganizer() {
+  const { user, userProfile } = useAuth();
+  const orgId = userProfile?.activeOrgId ?? '';
+  const { hasRole } = useOrg();
+
+  const [extinguishers, setExtinguishers] = useState<Extinguisher[]>([]);
+  const [locations, setLocations] = useState<Location[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Edits state
+  const [edits, setEdits] = useState<Record<string, Partial<Extinguisher>>>({});
+  const [saving, setSaving] = useState<Set<string>>(new Set());
+  const [bulkSaving, setBulkSaving] = useState(false);
+
+  // Selection
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [issueFilter, setIssueFilter] = useState<string>('all');
+
+  // Bulk Assignment States
+  const [bulkLocId, setBulkLocId] = useState('');
+  const [bulkSection, setBulkSection] = useState('');
+  const [bulkFloor, setBulkFloor] = useState('');
+  const [bulkVicinity, setBulkVicinity] = useState('');
+  const [bulkParentLocation, setBulkParentLocation] = useState('');
+  // Floor tools
+  const [extractingFloors, setExtractingFloors] = useState(false);
+  const [extractFloorsResult, setExtractFloorsResult] = useState<string | null>(
+    null,
+  );
+  const [assigningFloors, setAssigningFloors] = useState(false);
+  const [assignFloorsResult, setAssignFloorsResult] = useState<string | null>(
+    null,
+  );
+  const [normalizingFloors, setNormalizingFloors] = useState(false);
+  const [normalizeFloorsResult, setNormalizeFloorsResult] = useState<
+    string | null
+  >(null);
+  const [repairingReplacements, setRepairingReplacements] = useState(false);
+  const [repairReplacementResult, setRepairReplacementResult] = useState<
+    string | null
+  >(null);
+  const [dedupingAssets, setDedupingAssets] = useState(false);
+  const [dedupeAssetResult, setDedupeAssetResult] = useState<string | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (!orgId) return;
+    const unsubLocs = subscribeToLocations(orgId, setLocations);
+    const unsubExts = subscribeToExtinguishers(
+      orgId,
+      (data) => {
+        setExtinguishers(data);
+        setLoading(false);
+      },
+      {},
+    );
+    return () => {
+      unsubLocs();
+      unsubExts();
+    };
+  }, [orgId]);
+
+  const incomplete = useMemo(() => {
+    return extinguishers.filter((ext) => {
+      const issues = getIssues(ext);
+      if (issues.length === 0) return false;
+      if (issueFilter === 'all') return true;
+      return issues.includes(issueFilter);
+    });
+  }, [extinguishers, issueFilter]);
+
+  const handleEdit = (id: string, field: keyof Extinguisher, value: string) => {
+    setEdits((prev) => ({
+      ...prev,
+      [id]: {
+        ...(prev[id] || {}),
+        [field]: value,
+      },
+    }));
+  };
+
+  const handleSaveRow = async (ext: Extinguisher) => {
+    const extEdits = edits[ext.id!];
+    if (!extEdits || !orgId || !ext.id) return;
+
+    setSaving((prev) => {
+      const next = new Set(prev);
+      next.add(ext.id!);
+      return next;
+    });
+
+    try {
+      const updateData = { ...extEdits };
+      if (updateData.locationId) {
+        const derived = deriveLocationFields(
+          locations,
+          updateData.locationId as string,
+          (updateData.vicinity as string | undefined) ?? ext.vicinity ?? '',
+        );
+        updateData.parentLocation = derived.parentLocation;
+        if (!(updateData.floor as string | undefined)?.trim()) {
+          updateData.floor = derived.floor;
+        }
+        if (!(updateData.section as string | undefined)?.trim()) {
+          updateData.section = derived.section;
+        }
+      }
+
+      await updateExtinguisher(orgId, ext.id, updateData);
+
+      // Clear edits for this row
+      setEdits((prev) => {
+        const next = { ...prev };
+        delete next[ext.id!];
+        return next;
+      });
+    } catch (err) {
+      console.error('Failed to save row', err);
+      alert('Failed to save changes.');
+    } finally {
+      setSaving((prev) => {
+        const next = new Set(prev);
+        next.delete(ext.id!);
+        return next;
+      });
+    }
+  };
+
+  const handleBulkAssign = async () => {
+    if (!orgId || selected.size === 0) return;
+    if (!bulkLocId && !bulkSection && !bulkFloor && !bulkVicinity) {
+      alert('Please select a location, floor, section, or vicinity to assign.');
+      return;
+    }
+
+    setBulkSaving(true);
+    try {
+      const updates: Array<{ extId: string; data: Partial<Extinguisher> }> = [];
+
+      for (const extId of selected) {
+        const data: Partial<Extinguisher> = {};
+        if (bulkLocId) {
+          data.locationId = bulkLocId;
+          data.parentLocation = bulkParentLocation || '';
+        }
+        if (bulkSection) {
+          data.section = bulkSection;
+        }
+        if (bulkFloor) {
+          data.floor = bulkFloor;
+        }
+        if (bulkVicinity) {
+          data.vicinity = bulkVicinity;
+        }
+        updates.push({ extId, data });
+      }
+
+      await batchUpdateExtinguishers(orgId, updates);
+
+      setSelected(new Set());
+      setBulkLocId('');
+      setBulkSection('');
+      setBulkFloor('');
+      setBulkVicinity('');
+      setBulkParentLocation('');
+    } catch (err) {
+      console.error('Failed bulk assign', err);
+      alert('Failed to apply bulk assignment.');
+    } finally {
+      setBulkSaving(false);
+    }
+  };
+
+  function handleBulkLocationChange(value: DetailedLocationValue) {
+    setBulkLocId(value.locationId ?? '');
+    setBulkParentLocation(value.parentLocation);
+    setBulkFloor(value.floor);
+    setBulkSection(value.section);
+    setBulkVicinity(value.vicinity);
+  }
+
+  // Tool 1: infer the floor label from each unit's vicinity/section text.
+  const handleExtractFloors = async () => {
+    if (!orgId) return;
+    setExtractingFloors(true);
+    setExtractFloorsResult(null);
+    try {
+      const updates: Array<{ extId: string; data: Partial<Extinguisher> }> = [];
+      for (const ext of extinguishers) {
+        if (!ext.id) continue;
+        if ((ext.floor ?? '').trim()) continue;
+        const parsed =
+          parseFloorFromText(ext.vicinity) || parseFloorFromText(ext.section);
+        if (parsed) updates.push({ extId: ext.id, data: { floor: parsed } });
+      }
+      if (updates.length === 0) {
+        setExtractFloorsResult(
+          'No floors could be detected from vicinity or section text.',
+        );
+        return;
+      }
+      await batchUpdateExtinguishers(orgId, updates);
+      setExtractFloorsResult(
+        `Set the floor on ${updates.length} extinguisher(s) from their vicinity text.`,
+      );
+    } catch (err) {
+      console.error('Failed to extract floors', err);
+      setExtractFloorsResult('Failed to extract floors. Please try again.');
+    } finally {
+      setExtractingFloors(false);
+    }
+  };
+
+  // Tool 2: ensure a Building -> Floor location exists for each unit's floor
+  // label and assign the unit to that floor location.
+  const handleCreateAssignFloors = async () => {
+    if (!orgId || !user?.uid) return;
+    const uid = user.uid;
+    setAssigningFloors(true);
+    setAssignFloorsResult(null);
+    try {
+      // Working maps over current + newly created locations.
+      const locById = new Map<string, Location>();
+      const buildingByName = new Map<string, Location>();
+      const floorByKey = new Map<string, Location>(); // `${buildingId}::${normFloor}`
+      for (const loc of locations) {
+        if (!loc.id) continue;
+        locById.set(loc.id, loc);
+        if (!loc.parentLocationId) {
+          buildingByName.set(normalizeLocationName(loc.name), loc);
+        }
+        if (loc.locationType === 'floor' && loc.parentLocationId) {
+          floorByKey.set(
+            `${loc.parentLocationId}::${normalizeLocationName(loc.name)}`,
+            loc,
+          );
+        }
+      }
+
+      const resolveBuilding = async (
+        ext: Extinguisher,
+      ): Promise<Location | null> => {
+        // Prefer the named building; fall back to the top-level ancestor of locationId.
+        const name = (ext.parentLocation ?? '').trim();
+        if (name) {
+          const norm = normalizeLocationName(name);
+          const existing = buildingByName.get(norm);
+          if (existing) return existing;
+          const id = await createLocation(orgId, uid, {
+            name,
+            locationType: 'building',
+            parentLocationId: null,
+            description: null,
+          });
+          const created: Location = {
+            id,
+            name,
+            locationType: 'building',
+            parentLocationId: null,
+          } as Location;
+          buildingByName.set(norm, created);
+          locById.set(id, created);
+          return created;
+        }
+        if (ext.locationId) {
+          let cur = locById.get(ext.locationId) ?? null;
+          while (cur?.parentLocationId) {
+            cur = locById.get(cur.parentLocationId) ?? null;
+          }
+          return cur;
+        }
+        return null;
+      };
+
+      let buildingsCreated = 0;
+      let floorsCreated = 0;
+      let assigned = 0;
+      let skipped = 0;
+      const startingBuildings = buildingByName.size;
+      const updates: Array<{ extId: string; data: Partial<Extinguisher> }> = [];
+
+      for (const ext of extinguishers) {
+        if (!ext.id) continue;
+        const floorLabel = (ext.floor ?? '').trim();
+        if (!floorLabel) {
+          skipped += 1;
+          continue;
+        }
+        const building = await resolveBuilding(ext);
+        if (!building?.id) {
+          skipped += 1;
+          continue;
+        }
+        const key = `${building.id}::${normalizeLocationName(floorLabel)}`;
+        let floorLoc = floorByKey.get(key);
+        if (!floorLoc) {
+          const id = await createLocation(orgId, uid, {
+            name: floorLabel,
+            locationType: 'floor',
+            parentLocationId: building.id,
+            description: null,
+            sortOrder: floorSortRank(floorLabel),
+          });
+          floorLoc = {
+            id,
+            name: floorLabel,
+            locationType: 'floor',
+            parentLocationId: building.id,
+          } as Location;
+          floorByKey.set(key, floorLoc);
+          locById.set(id, floorLoc);
+          floorsCreated += 1;
+        }
+        // Skip units already at the floor or in a more precise child of it
+        // (e.g. a room under the floor) so we never flatten existing precision.
+        let alreadyPlaced = false;
+        let cursorId: string | null = ext.locationId ?? null;
+        while (cursorId) {
+          if (cursorId === floorLoc.id) {
+            alreadyPlaced = true;
+            break;
+          }
+          cursorId = locById.get(cursorId)?.parentLocationId ?? null;
+        }
+        if (!alreadyPlaced) {
+          updates.push({
+            extId: ext.id,
+            data: {
+              locationId: floorLoc.id ?? null,
+              parentLocation: building.name,
+            },
+          });
+          assigned += 1;
+        }
+      }
+
+      buildingsCreated = buildingByName.size - startingBuildings;
+
+      if (updates.length > 0) {
+        await batchUpdateExtinguishers(orgId, updates);
+      }
+
+      setAssignFloorsResult(
+        `Created ${buildingsCreated} building(s) and ${floorsCreated} floor(s); ` +
+          `assigned ${assigned} extinguisher(s) to a floor.` +
+          (skipped > 0 ? ` ${skipped} skipped (no floor or building).` : ''),
+      );
+    } catch (err) {
+      console.error('Failed to create/assign floors', err);
+      setAssignFloorsResult(
+        'Failed to create and assign floors. Please try again.',
+      );
+    } finally {
+      setAssigningFloors(false);
+    }
+  };
+
+  const handleNormalizeFloorLabels = async () => {
+    if (!orgId) return;
+    setNormalizingFloors(true);
+    setNormalizeFloorsResult(null);
+    try {
+      const plan = planFloorLocationCleanup(locations);
+      for (const rename of plan.renames) {
+        await updateLocation(orgId, rename.locationId, { name: rename.toName });
+      }
+
+      let mergedExtinguishers = 0;
+      for (const merge of plan.merges) {
+        // Ensure keep location has canonical name
+        await updateLocation(orgId, merge.keepLocationId, {
+          name: merge.keepName,
+        });
+        const sourceSet = new Set(merge.sourceLocationIds);
+        const updates = extinguishers
+          .filter((e) => e.id && e.locationId && sourceSet.has(e.locationId))
+          .map((e) => ({
+            extId: e.id!,
+            data: {
+              locationId: merge.keepLocationId,
+              floor: merge.keepName,
+            },
+          }));
+        if (updates.length > 0) {
+          await batchUpdateExtinguishers(orgId, updates);
+          mergedExtinguishers += updates.length;
+        }
+        for (const sourceId of merge.sourceLocationIds) {
+          await softDeleteLocation(orgId, sourceId);
+        }
+      }
+
+      // Also canonicalize free-text floor field on extinguishers
+      const floorFieldUpdates = extinguishers
+        .map((e) => {
+          const canonical = normalizeFloorLabel(e.floor);
+          if (!canonical || !e.id || canonical === (e.floor ?? '').trim()) {
+            return null;
+          }
+          return { extId: e.id, data: { floor: canonical } };
+        })
+        .filter(
+          (u): u is { extId: string; data: { floor: string } } => u != null,
+        );
+      if (floorFieldUpdates.length > 0) {
+        await batchUpdateExtinguishers(orgId, floorFieldUpdates);
+      }
+
+      setNormalizeFloorsResult(
+        `Normalized ${plan.renames.length} floor name(s), merged ${plan.merges.length} duplicate floor location(s) ` +
+          `(${mergedExtinguishers} extinguisher reassignment(s)), ` +
+          `updated ${floorFieldUpdates.length} extinguisher floor field(s). ` +
+          `Active workspace inspection rows still pointing at deleted floor IDs may need a workspace repair or re-open.`,
+      );
+    } catch (err) {
+      console.error('Failed to normalize floors', err);
+      setNormalizeFloorsResult(
+        'Failed to normalize floor labels. Please try again.',
+      );
+    } finally {
+      setNormalizingFloors(false);
+    }
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === incomplete.length) {
+      setSelected(new Set());
+    } else {
+      setSelected(new Set(incomplete.map((e) => e.id!)));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleDedupeActiveByAsset = async () => {
+    if (!orgId) return;
+    setDedupingAssets(true);
+    setDedupeAssetResult(null);
+    try {
+      const dedupe = httpsCallable<{ orgId: string }, { retiredCount: number }>(
+        functions,
+        'dedupeActiveExtinguishersByAssetId',
+      );
+      const res = await dedupe({ orgId });
+      setDedupeAssetResult(
+        res.data.retiredCount === 0
+          ? 'No duplicate active rows found for the same asset number.'
+          : `Retired ${res.data.retiredCount} duplicate active row(s). Open Inventory → Retired to review.`,
+      );
+    } catch (e) {
+      setDedupeAssetResult(e instanceof Error ? e.message : 'Dedupe failed.');
+    } finally {
+      setDedupingAssets(false);
+    }
+  };
+
+  const handleRepairReplacementLinks = async () => {
+    if (!orgId) return;
+    setRepairingReplacements(true);
+    setRepairReplacementResult(null);
+    try {
+      const repair = httpsCallable<{ orgId: string }, { repaired: number }>(
+        functions,
+        'repairStaleReplacementLinks',
+      );
+      const res = await repair({ orgId });
+      setRepairReplacementResult(
+        `Updated ${res.data.repaired} old unit(s) to replaced status. They now appear under Inventory → Retired / replaced.`,
+      );
+    } catch (err) {
+      console.error(err);
+      setRepairReplacementResult(
+        'Repair failed. Deploy the latest Cloud Functions (repairStaleReplacementLinks) and try again.',
+      );
+    } finally {
+      setRepairingReplacements(false);
+    }
+  };
+
+  if (!hasRole(['owner', 'admin'])) {
+    return (
+      <div className="p-6 text-center">
+        <h2 className="text-lg font-semibold">Access Denied</h2>
+        <p className="text-gray-500">
+          You need owner or admin privileges to use the Data Organizer.
+        </p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-12">
+        <Loader2 className="h-8 w-8 animate-spin text-red-600" />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex h-full flex-col p-6">
+      <div className="mb-6 flex items-center gap-3 border-b border-gray-200 pb-5">
+        <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-orange-100">
+          <Wrench className="h-5 w-5 text-orange-600" />
+        </div>
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Data Organizer</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Fix missing data from imports. Currently {incomplete.length}{' '}
+            extinguisher{incomplete.length !== 1 ? 's' : ''} need attention.
+          </p>
+        </div>
+      </div>
+
+      {/* Import help banner */}
+      <div className="mb-5 rounded-xl border border-blue-200 bg-blue-50 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <FileSpreadsheet className="mt-0.5 h-5 w-5 shrink-0 text-blue-600" />
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                Importing extinguishers?
+              </p>
+              <p className="mt-0.5 text-sm text-gray-600">
+                Use our template to get your columns right before you import.
+                After import, come back here to fill in any missing fields.
+              </p>
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <a
+              href="/extinguisher-import-template.csv"
+              download="extinguisher-import-template.csv"
+              className="flex items-center gap-1.5 rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm font-medium text-blue-700 hover:bg-blue-50"
+            >
+              <Download className="h-3.5 w-3.5" />
+              Template
+            </a>
+            <Link
+              to="/dashboard/import-guide"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              <HelpCircle className="h-3.5 w-3.5" />
+              Import Guide
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {/* Duplicate active asset numbers — retire older docs, keep newest */}
+      <div className="mb-5 rounded-xl border border-violet-200 bg-violet-50/80 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <Wrench className="mt-0.5 h-5 w-5 shrink-0 text-violet-700" />
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                Duplicate active rows (same asset number)
+              </p>
+              <p className="mt-0.5 text-sm text-gray-700">
+                Only one lifecycle-active extinguisher should exist per asset
+                ID. This tool keeps the newest document (by{' '}
+                <span className="font-mono text-xs">createdAt</span>) and
+                retires the others.
+              </p>
+              {dedupeAssetResult && (
+                <p className="mt-2 text-sm font-medium text-violet-900">
+                  {dedupeAssetResult}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleDedupeActiveByAsset}
+            disabled={dedupingAssets || !orgId}
+            className="flex shrink-0 items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700 disabled:opacity-50"
+          >
+            {dedupingAssets ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Wrench className="h-4 w-4" />
+            )}
+            Dedupe by asset number
+          </button>
+        </div>
+      </div>
+
+      {/* Replacement chain repair — marks old units replaced when a successor has replacesExtId */}
+      <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/80 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex items-start gap-3">
+            <RefreshCw className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+            <div>
+              <p className="text-sm font-semibold text-gray-900">
+                Retired / duplicate old units after replacement
+              </p>
+              <p className="mt-0.5 text-sm text-gray-700">
+                If a new extinguisher points at an old id via{' '}
+                <span className="font-mono text-xs">replacesExtId</span> but the
+                old record is still active, it can show up as extra work in
+                inspections. This one-time repair marks those old documents as
+                replaced (same as the in-app replacement flow). View results
+                under <strong>Retired extinguishers</strong> in the sidebar.
+              </p>
+              {repairReplacementResult && (
+                <p className="mt-2 text-sm font-medium text-green-800">
+                  {repairReplacementResult}
+                </p>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={handleRepairReplacementLinks}
+            disabled={repairingReplacements || !orgId}
+            className="flex shrink-0 items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {repairingReplacements ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <RefreshCw className="h-4 w-4" />
+            )}
+            Fix replacement links
+          </button>
+        </div>
+      </div>
+
+      {/* Floor tools — extract floor labels and build Building -> Floor structure */}
+      <div className="mb-5 rounded-xl border border-teal-200 bg-teal-50/80 p-4">
+        <div className="flex items-start gap-3">
+          <Wrench className="mt-0.5 h-5 w-5 shrink-0 text-teal-700" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-gray-900">
+              Organize floors
+            </p>
+            <p className="mt-0.5 text-sm text-gray-700">
+              Step 1 reads the floor from each unit&apos;s vicinity text (e.g.
+              &quot;2nd Floor&quot;) into a dedicated floor field. Step 2
+              creates a Floor location under each building and assigns units to
+              it, so you can drill Building → Floor while inspecting.
+            </p>
+            {(extractFloorsResult || assignFloorsResult || normalizeFloorsResult) && (
+              <div className="mt-2 space-y-1">
+                {extractFloorsResult && (
+                  <p className="text-sm font-medium text-teal-900">
+                    {extractFloorsResult}
+                  </p>
+                )}
+                {assignFloorsResult && (
+                  <p className="text-sm font-medium text-teal-900">
+                    {assignFloorsResult}
+                  </p>
+                )}
+                {normalizeFloorsResult && (
+                  <p className="text-sm font-medium text-teal-900">
+                    {normalizeFloorsResult}
+                  </p>
+                )}
+              </div>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleExtractFloors}
+                disabled={extractingFloors || !orgId}
+                className="flex items-center gap-2 rounded-lg border border-teal-300 bg-white px-4 py-2 text-sm font-medium text-teal-800 hover:bg-teal-50 disabled:opacity-50"
+              >
+                {extractingFloors ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4" />
+                )}
+                1. Extract floor from vicinity
+              </button>
+              <button
+                type="button"
+                onClick={handleCreateAssignFloors}
+                disabled={assigningFloors || !orgId}
+                className="flex items-center gap-2 rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700 disabled:opacity-50"
+              >
+                {assigningFloors ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckSquare className="h-4 w-4" />
+                )}
+                2. Create &amp; assign floors
+              </button>
+              <button
+                type="button"
+                onClick={handleNormalizeFloorLabels}
+                disabled={normalizingFloors || !orgId}
+                className="flex items-center gap-2 rounded-lg border border-teal-600 bg-white px-4 py-2 text-sm font-medium text-teal-900 hover:bg-teal-50 disabled:opacity-50"
+              >
+                {normalizingFloors ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Wrench className="h-4 w-4" />
+                )}
+                3. Normalize floor labels
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Filter Bar */}
+      <div className="mb-4 flex flex-wrap items-center gap-4">
+        <label className="text-sm font-medium text-gray-700">
+          Filter by Issue:
+        </label>
+        <select
+          value={issueFilter}
+          onChange={(e) => {
+            setIssueFilter(e.target.value);
+            setSelected(new Set());
+          }}
+          className="rounded-md border-gray-300 py-1.5 pl-3 pr-8 text-sm shadow-sm focus:border-red-500 focus:ring-red-500"
+        >
+          <option value="all">All Issues</option>
+          <option value="No location">No location</option>
+          <option value="No floor">No floor</option>
+          <option value="No serial">No serial</option>
+          <option value="No type">No type</option>
+          <option value="No year">No year</option>
+          <option value="No size">No size</option>
+        </select>
+      </div>
+
+      {/* Bulk Actions Bar */}
+      {selected.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-4 rounded-lg bg-orange-50 p-4 border border-orange-200 shadow-sm">
+          <span className="font-semibold text-orange-800">
+            {selected.size} selected
+          </span>
+          <div className="h-6 w-px bg-orange-300"></div>
+
+          <div className="min-w-[18rem] max-w-lg flex-1 rounded-md border border-orange-200 bg-white p-3">
+            <DetailedLocationPicker
+              mode="assign"
+              locations={locations}
+              locationId={bulkLocId || null}
+              vicinity={bulkVicinity}
+              floorLabel={bulkFloor}
+              onChange={handleBulkLocationChange}
+            />
+          </div>
+
+          <button
+            onClick={handleBulkAssign}
+            disabled={
+              bulkSaving ||
+              (!bulkLocId && !bulkSection && !bulkFloor && !bulkVicinity)
+            }
+            className="flex items-center gap-2 rounded-md bg-orange-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-orange-700 disabled:opacity-50"
+          >
+            {bulkSaving ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <CheckSquare className="h-4 w-4" />
+            )}
+            Apply to Selected
+          </button>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="flex-1 overflow-auto rounded-lg border border-gray-200 bg-white shadow-sm">
+        {incomplete.length === 0 ? (
+          <div className="flex flex-col items-center justify-center p-12 text-gray-500">
+            <CheckSquare className="mb-3 h-8 w-8 text-green-500" />
+            <p>All clean! No extinguishers are missing required data.</p>
+          </div>
+        ) : (
+          <table className="min-w-full divide-y divide-gray-200">
+            <thead className="sticky top-0 bg-gray-50 z-10 shadow-sm">
+              <tr>
+                <th className="px-4 py-3 text-left">
+                  <input
+                    type="checkbox"
+                    checked={
+                      selected.size === incomplete.length &&
+                      incomplete.length > 0
+                    }
+                    onChange={toggleSelectAll}
+                    className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                  />
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Asset ID
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500 w-48">
+                  Location
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Floor
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Section
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Serial
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Type
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Size
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Issues
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
+                  Action
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 bg-white">
+              {incomplete.map((ext) => {
+                const isSelected = selected.has(ext.id!);
+                const rowEdits = edits[ext.id!] || {};
+                const isDirty = Object.keys(rowEdits).length > 0;
+                const isSaving = saving.has(ext.id!);
+                const issues = getIssues(ext);
+
+                return (
+                  <tr
+                    key={ext.id}
+                    className={isSelected ? 'bg-orange-50' : 'hover:bg-gray-50'}
+                  >
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleSelectRow(ext.id!)}
+                        className="rounded border-gray-300 text-red-600 focus:ring-red-500"
+                      />
+                    </td>
+                    <td className="px-4 py-3 text-sm font-medium text-gray-900">
+                      <Link
+                        to={`/dashboard/inventory/${ext.id}`}
+                        className="text-red-600 hover:underline"
+                      >
+                        {ext.assetId}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={
+                          (rowEdits.locationId !== undefined
+                            ? rowEdits.locationId
+                            : ext.locationId) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(ext.id!, 'locationId', e.target.value)
+                        }
+                        className="block w-full min-w-[120px] rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                      >
+                        <option value="">
+                          {ext.parentLocation || 'Select Location'}
+                        </option>
+                        {locations.map((loc) => (
+                          <option key={loc.id} value={loc.id}>
+                            {getLocationPath(locations, loc.id!)}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="text"
+                        value={
+                          (rowEdits.floor !== undefined
+                            ? rowEdits.floor
+                            : ext.floor) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(ext.id!, 'floor', e.target.value)
+                        }
+                        className="block w-28 rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                        placeholder="Floor"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="text"
+                        value={
+                          (rowEdits.section !== undefined
+                            ? rowEdits.section
+                            : ext.section) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(ext.id!, 'section', e.target.value)
+                        }
+                        className="block w-24 rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                        placeholder="Section"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <input
+                        type="text"
+                        value={
+                          (rowEdits.serial !== undefined
+                            ? rowEdits.serial
+                            : ext.serial) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(ext.id!, 'serial', e.target.value)
+                        }
+                        className="block w-28 rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                        placeholder="Serial"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={
+                          (rowEdits.extinguisherType !== undefined
+                            ? rowEdits.extinguisherType
+                            : ext.extinguisherType) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(
+                            ext.id!,
+                            'extinguisherType',
+                            e.target.value,
+                          )
+                        }
+                        className="block w-32 rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                      >
+                        <option value="">Select Type</option>
+                        {EXTINGUISHER_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {t}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <select
+                        value={
+                          (rowEdits.extinguisherSize !== undefined
+                            ? rowEdits.extinguisherSize
+                            : ext.extinguisherSize) ?? ''
+                        }
+                        onChange={(e) =>
+                          handleEdit(
+                            ext.id!,
+                            'extinguisherSize',
+                            e.target.value,
+                          )
+                        }
+                        className="block w-24 rounded-md border-gray-300 py-1 text-sm focus:border-red-500 focus:ring-red-500"
+                      >
+                        <option value="">Select Size</option>
+                        {EXTINGUISHER_SIZES.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {issues.map((issue) => (
+                          <span
+                            key={issue}
+                            className="inline-flex items-center gap-1 rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800"
+                          >
+                            <AlertTriangle className="h-3 w-3" />
+                            {issue}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => handleSaveRow(ext)}
+                        disabled={!isDirty || isSaving}
+                        className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2.5 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        {isSaving ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save className="h-4 w-4" />
+                        )}
+                        Save
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}

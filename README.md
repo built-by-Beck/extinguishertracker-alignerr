@@ -1,0 +1,338 @@
+# Extinguisher Tracker 3 (EX3)
+
+<p align="center">
+  <img src="media/extinguisherTracker.png" alt="Extinguisher Tracker 3 Logo" width="200" />
+</p>
+
+<p align="center">
+  <strong>Professional fire extinguisher inspection, compliance, and lifecycle management.</strong><br/>
+  A multi-tenant SaaS platform built for organizations that need to stay NFPA 10 compliant.
+</p>
+
+<p align="center">
+  <a href="https://extinguisher-tracker-3.web.app">Production</a> &bull;
+  <a href="https://extinguisher-tracker-3--dev-2zat4bfo.web.app">Dev Preview</a>
+</p>
+
+---
+
+## Overview
+
+Keep inspection list/count logic in `src/utils/workspaceInspectionStats.ts`.
+
+Extinguisher Tracker 3 replaces paper binders and disconnected spreadsheets with a real-time, audit-ready inspection platform. It is designed for hospitals, schools, warehouses, manufacturing facilities, property management companies, and fire protection service providers.
+
+The system is **organization-centric** — all operational data belongs to the organization, not individual users. Multiple team members collaborate within a shared dataset governed by role-based permissions.
+
+## Key Features
+
+- **Barcode & QR Scanning** — Use your phone camera to instantly look up extinguishers in the field
+- **NFPA 10 Compliance Engine** — Monthly, annual, 6-year maintenance, and hydrostatic testing intervals tracked automatically
+- **Inspection Workspaces** — Organize monthly inspections by workspace with section progress tracking
+- **AI Maintenance Helper** — Pro+ assistant for on-the-fly compliance questions, temporary photo questions, and extinguisher lists with asset, serial, location, section, and vicinity details
+- **Section Timer Controls** — Automatically tracks section timing with manual start, stop, and reset controls plus safeguards for forgotten timers
+- **Placement Calculator** — Determine required extinguisher quantities and types based on hazard class and floor area
+- **Offline Support** — Perform inspections in areas with no connectivity; data syncs automatically when back online
+- **Compliance Dashboard** — Real-time visibility into passed, failed, and overdue inspections across your organization
+- **Location Hierarchy** — Organize assets by building, floor, section, and vicinity
+- **Inspection Routes** — Pre-configured walking routes for efficient field workflows
+- **Photo & GPS Documentation** — Capture photographic evidence and location data during inspections
+- **Lifecycle Tracking** — Replacement history archives prior unit details, tracks retired service status, and supports returned spare inventory
+- **Expiration Planning Lists** — Separate official marked-expired inventory from advisory 6+ year manufacture-date candidates
+- **Audit Logs** — Append-only, immutable compliance records for regulatory audits
+- **Reports & Exports** — Generate compliance reports in PDF, CSV, and JSON formats with asset, serial, location, section, and vicinity details; create focused reports for failed or expired units, passed units, pending inspections, or replacement candidates, sorted by location or asset ID
+- **Legal Attestation** — Digital inspection sign-off for regulatory compliance
+- **Tag / QR Label Printing** — Generate and print asset tags for physical extinguishers
+- **Multi-Tenant Isolation** — Strict data separation between organizations at every layer
+- **Role-Based Access** — Owner, Admin, Inspector, and Viewer roles with granular permissions
+- **Secure Profiles & Branding** — Users choose preset avatars; organization creators can manage org profile details, with Pro+ logo branding on a locked-down Storage path
+- **Real-Time Collaboration** — Multiple inspectors working simultaneously with live updates
+- **Data Restore Tools** — JSON backup restoration with automatic duplicate detection
+
+### AI reference edition policy
+
+- AI guidance uses the organization's configured NFPA reference from Settings.
+- New organizations fall back to **NFPA 10 (2022)** until an owner or admin changes the reference.
+- Organizations operating under different adopted editions can add local AHJ/internal policy notes as AI context.
+- AI responses are operational guidance and should be validated by qualified personnel before final compliance decisions.
+
+## Tech Stack
+
+| Layer               | Technology                                                       |
+| ------------------- | ---------------------------------------------------------------- |
+| **Frontend**        | React 19, TypeScript, Tailwind CSS 4, Vite 8                     |
+| **Backend**         | Firebase (Cloud Functions v2, Firestore, Auth, Hosting, Storage) |
+| **Runtime**         | Node.js 22                                                       |
+| **Payments**        | Stripe (webhook-driven subscription management)                  |
+| **Icons**           | Lucide React                                                     |
+| **Barcode**         | @undecaf/barcode-detector-polyfill                               |
+| **Spreadsheets**    | SheetJS (xlsx)                                                   |
+| **QR Generation**   | qrcode                                                           |
+| **Testing**         | Vitest, Testing Library, jsdom                                   |
+| **Package Manager** | pnpm                                                             |
+
+## Project Structure
+
+```
+extinguisher-tracker-3/
+├── src/                        # Frontend application
+│   ├── app/                    # App-level configuration
+│   ├── components/             # Shared UI components
+│   ├── contexts/               # React context providers
+│   ├── hooks/                  # Custom React hooks
+│   ├── lib/                    # Library wrappers (Firebase, Stripe)
+│   ├── pages/                  # Route-level page components
+│   │   ├── marketing/          # Public marketing pages
+│   │   └── guest/              # Guest/unauthenticated pages
+│   ├── routes/                 # Route definitions
+│   ├── services/               # API/service layer
+│   ├── store/                  # State management
+│   ├── types/                  # TypeScript type definitions
+│   └── utils/                  # Utility functions
+├── functions/src/              # Firebase Cloud Functions (backend)
+│   ├── billing/                # Stripe integration & webhooks
+│   ├── inspections/            # Inspection business logic
+│   ├── invites/                # Organization invite system
+│   ├── lifecycle/              # Extinguisher lifecycle engine
+│   ├── members/                # Membership management
+│   ├── notifications/          # Alert & reminder system
+│   ├── orgs/                   # Organization CRUD & management
+│   ├── reports/                # Report generation
+│   ├── tags/                   # Asset tag operations
+│   ├── workspaces/             # Workspace management
+│   ├── guest/                  # Guest access functions
+│   ├── config/                 # Function configuration
+│   ├── data/                   # Data utilities
+│   ├── types/                  # Shared backend types
+│   ├── utils/                  # Backend utilities
+│   └── __tests__/              # Backend test suite
+├── BUILD-SPECS/                # 25 specification documents (source of truth)
+├── firestore.rules             # Firestore security rules
+├── storage.rules               # Cloud Storage security rules
+├── firestore.indexes.json      # Firestore composite indexes
+└── firebase.json               # Firebase project configuration
+```
+
+## Plans & Pricing
+
+| Plan           | Price     | Extinguishers                      | Target Audience                                     |
+| -------------- | --------- | ---------------------------------- | --------------------------------------------------- |
+| **Basic**      | $29.99/mo | 50 included (+$10/50 additional)   | Small businesses, restaurants, retail stores        |
+| **Pro**        | $99/mo    | 250 included (+$10/100 additional) | Schools, small hospitals, property managers         |
+| **Elite**      | $199/mo   | 500 included (+$10/200 additional) | Large facilities, universities, industrial campuses |
+| **Enterprise** | Custom    | Unlimited                          | Custom compliance workflows, SLA support            |
+
+All plans include core inventory, inspection features, and preset user avatars. Higher tiers unlock barcode scanning, GPS capture, inspection photos, AI assistant, organization logo branding, route optimization, advanced analytics, lifecycle compliance tracking, and priority support.
+
+Contact: **info@example.com**
+
+## Getting Started
+
+### Prerequisites
+
+- [Node.js](https://nodejs.org/) v22+
+- [pnpm](https://pnpm.io/) v10+
+- [Firebase CLI](https://firebase.google.com/docs/cli) (`npm install -g firebase-tools`)
+- A Firebase project with Firestore, Auth, Storage, and Functions enabled
+- A Stripe account with configured products and webhook endpoints
+
+### Installation
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd extinguisher-tracker-3
+
+# Install frontend dependencies
+pnpm install
+
+# Install Cloud Functions dependencies
+cd functions && npm install && cd ..
+```
+
+### Environment Variables
+
+Create a `.env` file in the project root for frontend variables:
+
+```env
+VITE_FIREBASE_API_KEY=your_api_key
+VITE_FIREBASE_AUTH_DOMAIN=your_project.firebaseapp.com
+VITE_FIREBASE_PROJECT_ID=your_project_id
+VITE_FIREBASE_STORAGE_BUCKET=your_project.firebasestorage.app
+VITE_FIREBASE_MESSAGING_SENDER_ID=your_sender_id
+VITE_FIREBASE_APP_ID=your_app_id
+VITE_STRIPE_PUBLISHABLE_KEY=pk_live_or_test_xxx
+```
+
+Set Cloud Functions secrets via Firebase:
+
+```bash
+firebase functions:secrets:set STRIPE_SECRET_KEY
+firebase functions:secrets:set STRIPE_WEBHOOK_SECRET
+```
+
+Set **monthly and yearly** Stripe price IDs in `functions/.env` (deploy-time parameters, not Secret Manager):
+
+- `STRIPE_PRICE_ID_BASIC`, `STRIPE_PRICE_ID_PRO`, `STRIPE_PRICE_ID_ELITE`
+- `STRIPE_PRICE_ID_BASIC_YEARLY`, `STRIPE_PRICE_ID_PRO_YEARLY`, `STRIPE_PRICE_ID_ELITE_YEARLY`
+
+See [`functions/.env.example`](functions/.env.example) for amounts (yearly = monthly × 12 × 0.9).
+
+### Billing (Stripe) and Pro trial
+
+- **Source of truth:** Stripe subscriptions and webhooks update cached fields on `org/{orgId}` (`subscriptionStatus`, `trialEnd`, `proTrialConsumed`, etc.). Clients never write billing fields; see [`firestore.rules`](firestore.rules).
+- **Pro 7-day trial (monthly only):** New organizations with **no existing Stripe subscription** can start Checkout with a **7-day** Pro trial and **`payment_method_collection: if_required`** (no card until needed). Configurable via **`PRO_TRIAL_DAYS`** in Functions runtime env (`functions/.env` / deploy env); default **7**.
+- **One trial per org:** `proTrialConsumed` is set when the subscription enters **`trialing`** for Pro (webhook). Orgs that already have **`stripeSubscriptionId`** (e.g. Basic) upgrade via paid Checkout without this trial path.
+- **Stripe webhook events:** Ensure your Stripe Dashboard endpoint receives at least: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`, `invoice.payment_succeeded`, `invoice.payment_failed`, and optionally **`customer.subscription.trial_will_end`** (audit log only today). Use the **live** signing secret in production (`STRIPE_WEBHOOK_SECRET`).
+- **Annual billing:** Yearly checkout uses the `*_YEARLY` price IDs above. The no-card Pro trial applies to **monthly** Pro only.
+
+### Development
+
+```bash
+# Start the Vite dev server
+pnpm dev
+
+# Start Firebase emulators (Auth, Firestore, Functions, Storage)
+pnpm emulators
+
+# Start emulators with persisted data
+pnpm emulators:import
+
+# Export emulator data for later use
+pnpm emulators:export
+```
+
+### Build & Deploy
+
+```bash
+# Production build
+pnpm build
+
+# Deploy to Firebase dev preview channel (expires in 7 days)
+pnpm deploy:dev
+
+# Deploy to production
+firebase deploy
+
+# Deploy only Cloud Functions
+cd functions && npm run build && cd .. && firebase deploy --only functions
+
+# Deploy only Firestore rules
+firebase deploy --only firestore:rules
+
+# Deploy only Storage rules
+firebase deploy --only storage
+```
+
+### Testing
+
+```bash
+# Run frontend tests
+pnpm test
+
+# Run frontend tests in watch mode
+pnpm test:watch
+
+# Run backend tests
+cd functions && npm test
+
+# Lint
+pnpm lint
+```
+
+## Architecture Principles
+
+1. **Organization-centric data model** — All operational data lives under `org/{orgId}/...`. Never under `usr/{uid}`.
+2. **Strict multi-tenant isolation** — Cross-org queries are forbidden. Every query is scoped to a single orgId.
+3. **Org-specific roles** — Owner > Admin > Inspector > Viewer. Enforced at Firestore rules and Cloud Functions.
+4. **Auth ≠ Authorization** — A valid auth session does not grant org data access. Membership and role must be verified.
+5. **Stripe is billing source of truth** — Firestore caches billing state. The client never mutates billing directly.
+6. **Privileged operations via Cloud Functions only** — Org creation, invites, role changes, billing, workspace archival, and report generation.
+7. **Immutable compliance records** — Inspection events and audit logs are append-only once archived.
+8. **Offline-first field design** — Inspectors work in low-connectivity areas. Local caching and queued writes are required.
+
+## Firestore Data Model
+
+```
+org/{orgId}                           # Tenant root document
+  ├── members/{uid}                   # Organization members & roles
+  ├── locations/{locationId}          # Buildings, floors, sections
+  ├── extinguishers/{extId}           # Extinguisher inventory
+  ├── workspaces/{workspaceId}        # Monthly inspection workspaces
+  ├── inspections/{inspectionId}      # Inspection records
+  ├── inspectionEvents/{eventId}      # Immutable inspection events
+  ├── reports/{reportId}              # Generated reports
+  ├── auditLogs/{logId}              # Immutable audit trail
+  ├── notifications/{notifId}         # User notifications
+  ├── inspectionRoutes/{routeId}      # Pre-configured walking routes
+  └── settings/{settingId}            # Org-level settings
+
+usr/{uid}                             # User profile metadata only
+invite/{inviteId}                     # Organization invitations (pending / accepted / expired / revoked)
+```
+
+### Team invites (Elite / Enterprise)
+
+- Owners and admins invite members from **Members** (`/dashboard/members`). Invites are **link-based**: after create, copy the invite URL and share it manually — no automatic email is sent yet.
+- Invite links expire after **7 days**. Creating a new invite for the same email auto-expires any overdue pending invite so re-invite is not blocked.
+- Pending invites appear on the Members page and can be **revoked** by owners/admins. A daily `expireInvitesJob` marks overdue pending invites as `expired`, then hard-deletes expired/revoked/accepted invite docs **30 days** after their original `expiresAt`.
+- Roles: Admin (manage org), Inspector (field inspections), Viewer (read-only). Multiple inspectors can work the same org concurrently.
+
+## Development Workflow
+
+This project uses a branch-based workflow:
+
+- **`dev`** — Active development and preview. Pushes deploy to the [Dev Preview Channel](https://extinguisher-tracker-3--dev-2zat4bfo.web.app).
+- **`main`** — Production-ready code. Merges to main deploy to the [Production Site](https://extinguisher-tracker-3.web.app).
+
+## Specification Documents
+
+The `BUILD-SPECS/` directory contains 25 comprehensive specification documents that serve as the source of truth for all implementation:
+
+| #   | Document                      | Topic                                             |
+| --- | ----------------------------- | ------------------------------------------------- |
+| 00  | AI Build Instructions         | Master rules for AI-assisted implementation       |
+| 01  | Project Overview              | Product vision, architecture, design philosophy   |
+| 02  | Auth, Orgs & Billing          | Authentication, organizations, roles, Stripe      |
+| 03  | Database Schema               | Complete Firestore schema and structural rules    |
+| 04  | Features Specification        | Detailed product features and acceptance criteria |
+| 05  | UI Components                 | Screens, layouts, and user-facing flows           |
+| 06  | Business Logic                | Core business rules and compliance logic          |
+| 07  | API / Cloud Functions         | Backend function specifications                   |
+| 08  | Reports & Exports             | Report generation and export formats              |
+| 09  | Plans & Pricing               | Subscription tiers and feature gating             |
+| 10  | Multi-Tenant Isolation        | Tenant separation rules                           |
+| 11  | NFPA Compliance System        | NFPA 10 compliance tracking rules                 |
+| 12  | Extinguisher Lifecycle Engine | Lifecycle state machine and transitions           |
+| 13  | Asset Tagging                 | Barcode and QR code workflows                     |
+| 14  | Audit Logging                 | Immutable audit trail specification               |
+| 15  | Location Hierarchy            | Building/floor/section organization               |
+| 16  | Inspection Routes             | Route planning and optimization                   |
+| 17  | Offline Sync                  | Offline-first architecture and sync logic         |
+| 18  | Legal Attestation             | Digital inspection sign-off                       |
+| 19  | Placement Calculator          | Extinguisher quantity/type calculations           |
+| 20  | Notifications System          | Alerts, reminders, and notification delivery      |
+| 21  | Security Rules Architecture   | Firestore and Storage security rules              |
+| 22  | Deployment & Environments     | Deployment pipeline and environment config        |
+| 23  | Monitoring & Observability    | Logging, metrics, and alerting                    |
+| 24  | Data Retention & Backups      | Backup strategy and data retention policies       |
+
+## Firebase Emulators
+
+The project includes emulator configuration for local development:
+
+| Service     | Port |
+| ----------- | ---- |
+| Auth        | 9099 |
+| Firestore   | 8080 |
+| Functions   | 5001 |
+| Storage     | 9199 |
+| Emulator UI | 4000 |
+
+## License
+
+Apache 2.0
+
+---
+
+Created and maintained by **[David Beck](https://example.com)**

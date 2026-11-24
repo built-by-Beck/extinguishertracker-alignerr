@@ -1,0 +1,428 @@
+import type { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
+import {
+  Bell,
+  Building2,
+  Camera,
+  CheckCircle2,
+  ClipboardList,
+  Church,
+  Factory,
+  FileText,
+  HeartPulse,
+  MapPin,
+  Printer,
+  RefreshCcw,
+  School,
+  ShieldCheck,
+  Share2,
+  Wrench,
+  Bot,
+  Calculator,
+  DatabaseZap,
+  Barcode,
+  WifiOff,
+} from 'lucide-react';
+import { MarketingPageMeta } from '../../components/marketing/MarketingPageMeta.tsx';
+import { PublicMarketingLayout } from '../../components/marketing/PublicMarketingLayout.tsx';
+import { MarketingPricingPlans } from '../../components/marketing/MarketingPricingPlans.tsx';
+import { MarketingSignupLink } from '../../components/marketing/MarketingSignupLink.tsx';
+import { MarketingTrialHero } from '../../components/marketing/MarketingTrialHero.tsx';
+import { MarketingSavingsCallout } from '../../components/marketing/MarketingSavingsCallout.tsx';
+import { useBillingIntervalPreference } from '../../hooks/useBillingIntervalPreference.ts';
+import { TRIAL_CTA_LABEL } from '../../lib/marketingCtaCopy.ts';
+import { marketingSeo } from './marketingSeo.ts';
+import { TRIAL_DAYS } from '../../lib/billingConfig.ts';
+
+function Section({
+  id,
+  className = '',
+  children,
+}: {
+  id?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      id={id}
+      className={`mx-auto max-w-6xl px-4 py-16 sm:px-6 ${className}`}
+    >
+      {children}
+    </section>
+  );
+}
+
+export default function MarketingHomePage() {
+  const seo = marketingSeo.home;
+  const { interval, setInterval } = useBillingIntervalPreference();
+
+  return (
+    <>
+      <MarketingPageMeta
+        title={seo.title}
+        description={seo.description}
+        path={seo.path}
+      />
+      <PublicMarketingLayout>
+        <Section className="py-14 sm:py-20">
+          <div className="max-w-3xl">
+            <h1 className="text-4xl font-bold tracking-tight text-gray-900 sm:text-5xl">
+              Field-built extinguisher software for teams that cannot afford
+              missed checks
+            </h1>
+            <p className="mt-5 text-lg text-gray-600 sm:text-xl">
+              ExtinguisherTracker brings inventory, inspections, AI guidance,
+              offline-ready field work, reports, reminders, and audit history
+              into one system built around the way life safety work actually
+              happens.
+            </p>
+            <div className="mt-8">
+              <MarketingTrialHero
+                size="hero"
+                compareHref="#plans-preview"
+                onTrialClick={() => setInterval('month')}
+              />
+            </div>
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+              <Link
+                to="/pricing"
+                className="inline-flex justify-center rounded-md border border-gray-300 bg-white px-6 py-3 text-sm font-semibold text-gray-900 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+              >
+                View pricing
+              </Link>
+            </div>
+            <p className="mt-4 text-sm text-gray-500">
+              Already using the product?{' '}
+              <Link
+                to="/login"
+                className="font-medium text-red-600 hover:text-red-500"
+              >
+                Sign in
+              </Link>
+            </p>
+          </div>
+        </Section>
+
+        <div className="border-y border-gray-200 bg-white">
+          <Section>
+            <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+              The problem with paper and spreadsheets
+            </h2>
+            <p className="mt-4 max-w-3xl text-gray-600">
+              Extinguisher programs create a lot of data: dates, locations, and
+              pass/fail results. When this lives in paper binders or
+              disconnected spreadsheets, it is easy to miss a unit, lose history
+              when staff changes, or scramble when an inspector asks for proof.
+            </p>
+            <ul className="mt-8 grid gap-4 sm:grid-cols-2">
+              {[
+                'Hard to see what is due, what failed, and what is still open',
+                'Lost data: tags, locations, and units get out of sync',
+                'Weak audit trail when fire marshals or inspectors ask for records',
+                'Crews need a workflow that works on phones, not just clipboards',
+                'Disconnected tools make replacement history, guest access, and reports harder than they should be',
+                'Field teams lose time when bad signal, missing photos, or unclear follow-ups break the route',
+              ].map((item) => (
+                <li
+                  key={item}
+                  className="flex gap-3 rounded-lg border border-gray-100 bg-gray-50 p-4"
+                >
+                  <CheckCircle2
+                    className="mt-0.5 h-5 w-5 shrink-0 text-red-600"
+                    aria-hidden
+                  />
+                  <span className="text-sm text-gray-700">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        </div>
+
+        <Section>
+          <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+            What ExtinguisherTracker does
+          </h2>
+          <p className="mt-4 max-w-3xl text-gray-600">
+            It covers the full program: setup, inventory, tags, mobile
+            inspections, custom asset checks, evidence, reminders, reports,
+            guest sharing, lifecycle changes, and the cleanup tools that keep
+            records trustworthy.
+          </p>
+          <div className="mt-10 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            {[
+              {
+                title: 'Barcode & QR Scanning',
+                body: 'Use your phone camera to scan assets instantly. Finish your routes in half the time compared to paper.',
+                icon: Barcode,
+              },
+              {
+                title: 'AI Maintenance Assistant',
+                body: 'Ask compliance questions, get overdue summaries, draft inspection notes, and analyze temporary photos — all without leaving the app. Ask things like "How far apart should extinguishers be per NFPA 2022?" and get an immediate answer referenced to your configured NFPA edition. Available on Pro, Elite, and Enterprise plans.',
+                icon: Bot,
+              },
+              {
+                title: 'Section Auto Timer',
+                body: 'Track route time automatically so crews can stay on pace, surface slow sections, and avoid missed checks.',
+                icon: ClipboardList,
+              },
+              {
+                title: 'Placement Calculator',
+                body: 'Plan extinguisher quantities and coverage with an advisory calculator that keeps local AHJ review in the loop.',
+                icon: Calculator,
+              },
+              {
+                title: 'Simple Inventory',
+                body: 'Track every extinguisher with its exact location so your team always knows where to go.',
+                icon: MapPin,
+              },
+              {
+                title: 'Inspection Workflow',
+                body: 'Monthly workspaces, structured checks, follow-ups, and section timers help crews finish routes consistently.',
+                icon: ClipboardList,
+              },
+              {
+                title: 'Compliance at a Glance',
+                body: 'See exactly what is due or overdue on one dashboard. Know your status before an audit happens.',
+                icon: ShieldCheck,
+              },
+              {
+                title: 'Data Cleanup Tools',
+                body: 'Keep your records clean with automatic duplicate detection and easy backup restoration.',
+                icon: DatabaseZap,
+              },
+              {
+                title: 'Offline Field Work',
+                body: 'Keep moving in low-signal areas with offline support and a sync queue for inspection work.',
+                icon: WifiOff,
+              },
+              {
+                title: 'Photo, GPS & Notes',
+                body: 'Attach field evidence to inspection work so records show more than a pass or fail checkbox.',
+                icon: Camera,
+              },
+              {
+                title: 'Reports & Audit Logs',
+                body: 'Generate PDF, CSV, and JSON reports with asset, serial, location, section, and vicinity details, then preserve a durable activity trail for audits and internal reviews.',
+                icon: FileText,
+              },
+              {
+                title: 'Tags, QR Links & Print',
+                body: 'Create scannable workflows with QR links, printable lists, and bulk tag printing for larger programs.',
+                icon: Printer,
+              },
+              {
+                title: 'Guest Sharing',
+                body: 'Share limited guest access when outside reviewers need visibility without giving them full admin rights.',
+                icon: Share2,
+              },
+              {
+                title: 'Lifecycle Tracking',
+                body: 'Track replacement and retirement history so old serials, new assets, and active records stay clear.',
+                icon: RefreshCcw,
+              },
+              {
+                title: 'Reminders & Notifications',
+                body: 'Use in-app notifications and reminder workflows to keep overdue work from disappearing.',
+                icon: Bell,
+              },
+            ].map(({ title, body, icon: Icon }) => (
+              <div
+                key={title}
+                className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
+              >
+                <Icon className="h-9 w-9 text-red-600" aria-hidden />
+                <h3 className="mt-4 text-lg font-semibold text-gray-900">
+                  {title}
+                </h3>
+                <p className="mt-2 text-sm text-gray-600">{body}</p>
+              </div>
+            ))}
+          </div>
+          <p className="mt-10">
+            <Link
+              to="/features"
+              className="font-medium text-red-600 hover:text-red-500"
+            >
+              Explore all features →
+            </Link>
+          </p>
+        </Section>
+
+        <div className="border-y border-gray-200 bg-gray-950">
+          <Section>
+            <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:gap-16">
+              <div className="lg:max-w-md lg:shrink-0">
+                <div className="flex items-center gap-3">
+                  <Bot className="h-8 w-8 text-red-400" aria-hidden />
+                  <h2 className="text-2xl font-bold text-white sm:text-3xl">
+                    Your on-call compliance expert
+                  </h2>
+                </div>
+                <p className="mt-4 text-gray-300">
+                  The Pro+ AI assistant is built for people actively working a
+                  route — not for sitting at a desk with time to search a PDF.
+                  Ask anything and get a referenced answer in seconds.
+                </p>
+                <ul className="mt-6 space-y-2">
+                  {[
+                    'Compliance code lookups — NFPA 10 and your configured edition',
+                    'Live overdue summaries from your actual inventory',
+                    'Note drafting from rough field descriptions',
+                    'Temporary photo analysis without attaching to the record',
+                    'Context-aware follow-up questions in the same session',
+                  ].map((item) => (
+                    <li
+                      key={item}
+                      className="flex items-start gap-2 text-sm text-gray-300"
+                    >
+                      <CheckCircle2
+                        className="mt-0.5 h-4 w-4 shrink-0 text-red-400"
+                        aria-hidden
+                      />
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div className="flex-1">
+                <p className="mb-4 text-xs font-semibold uppercase tracking-wider text-gray-500">
+                  Example questions
+                </p>
+                <div className="space-y-3">
+                  {[
+                    'Can you tell me how far extinguishers are supposed to be apart according to NFPA 2022?',
+                    'Which extinguishers in Building A are overdue for their annual inspection?',
+                    'Write a follow-up note for Unit A-12: gauge slightly low, passed visual check, recheck in 30 days.',
+                    'I am uploading a photo of this pressure gauge — does the reading look normal?',
+                    'What are the six-year maintenance requirements for a dry chemical extinguisher?',
+                    'Summarize everything currently failing or overdue in inventory.',
+                  ].map((q) => (
+                    <div
+                      key={q}
+                      className="rounded-lg border border-gray-700 bg-gray-900 px-4 py-3"
+                    >
+                      <p className="text-sm text-gray-200">"{q}"</p>
+                    </div>
+                  ))}
+                </div>
+                <p className="mt-4 text-xs text-gray-500">
+                  AI references the NFPA edition configured in Organization
+                  Settings. Confirm final decisions with your AHJ and internally
+                  adopted code edition.
+                </p>
+              </div>
+            </div>
+          </Section>
+        </div>
+
+        <div className="border-y border-gray-200 bg-white">
+          <Section>
+            <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+              Who it is for
+            </h2>
+            <p className="mt-4 max-w-3xl text-gray-600">
+              Teams accountable for life safety assets across buildings and
+              campuses—not only fire professionals, but the people who actually
+              execute routes and answer for documentation.
+            </p>
+            <ul className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              {[
+                { label: 'Hospitals & healthcare', icon: HeartPulse },
+                { label: 'Schools & campuses', icon: School },
+                { label: 'Churches & community facilities', icon: Church },
+                { label: 'Property & facility management', icon: Building2 },
+                { label: 'Industrial & commercial sites', icon: Factory },
+                { label: 'Maintenance departments', icon: Wrench },
+                { label: 'Safety & compliance leads', icon: ShieldCheck },
+              ].map(({ label, icon: Icon }) => (
+                <li
+                  key={label}
+                  className="flex items-center gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3"
+                >
+                  <Icon className="h-5 w-5 shrink-0 text-red-600" aria-hidden />
+                  <span className="text-sm font-medium text-gray-800">
+                    {label}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </Section>
+        </div>
+
+        <Section>
+          <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+            Built for the real world
+          </h2>
+          <p className="mt-4 max-w-3xl text-gray-600">
+            This product exists because inspection programs are messy: people
+            leave, locations change, devices lose signal, extinguishers get
+            replaced, and inspectors show up unannounced. Every major feature is
+            there because it solves a real operational need, not because it
+            looked good on a software checklist.
+          </p>
+          <p className="mt-4 max-w-3xl text-gray-600">
+            It was independently built by someone with life safety field
+            experience who also writes software, which is why the product stays
+            focused on practical work: find the asset, complete the check,
+            preserve the evidence, and know what still needs attention.
+          </p>
+          <p className="mt-4 max-w-3xl text-sm text-gray-500">
+            AI guidance references the NFPA edition configured in Organization
+            Settings, with NFPA 10 (2022) as the new-org fallback. Your
+            organization should align responses with the edition adopted in your
+            jurisdiction and internal policy.
+          </p>
+        </Section>
+
+        <div className="border-y border-gray-200 bg-white" id="plans-preview">
+          <Section className="pb-4">
+            <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">
+              Plans
+            </h2>
+            <p className="mt-4 max-w-2xl text-gray-600">
+              Choose monthly or yearly billing, then pick the tier that fits
+              your program. Checkout happens in the app after you create an
+              account.
+            </p>
+            <div className="mt-6">
+              <MarketingSavingsCallout interval={interval} prominent />
+            </div>
+          </Section>
+          <MarketingPricingPlans
+            compactToggle
+            interval={interval}
+            onIntervalChange={setInterval}
+          />
+        </div>
+
+        <Section className="pb-20">
+          <div className="rounded-2xl bg-red-600 px-6 py-12 text-center sm:px-12">
+            <h2 className="text-2xl font-bold text-white sm:text-3xl">
+              Ready to tighten up your extinguisher program?
+            </h2>
+            <p className="mx-auto mt-4 max-w-2xl text-red-100">
+              Create an account, set up your organization, and start your{' '}
+              {TRIAL_DAYS}-day free trial with full plan access.
+            </p>
+            <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+              <MarketingSignupLink
+                proTrial
+                onClick={() => setInterval('month')}
+                className="inline-flex w-full justify-center rounded-md bg-white px-6 py-3 text-sm font-semibold text-red-700 shadow hover:bg-red-50 sm:w-auto"
+              >
+                {TRIAL_CTA_LABEL}
+              </MarketingSignupLink>
+              <Link
+                to="/how-it-works"
+                className="inline-flex w-full justify-center rounded-md border border-red-400 px-6 py-3 text-sm font-semibold text-white hover:bg-red-700 sm:w-auto"
+              >
+                See how it works
+              </Link>
+            </div>
+          </div>
+        </Section>
+      </PublicMarketingLayout>
+    </>
+  );
+}

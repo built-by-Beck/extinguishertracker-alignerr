@@ -1,0 +1,403 @@
+import { useState, useEffect, type ReactNode } from 'react';
+import { Link, NavLink, useLocation } from 'react-router-dom';
+import { Menu, X } from 'lucide-react';
+import { PublicAdSlot } from '../ads/PublicAdSlot.tsx';
+import { MarketingSignupLink } from './MarketingSignupLink.tsx';
+import { TRIAL_CTA_LABEL } from '../../lib/marketingCtaCopy.ts';
+import { LaunchPromoBanner } from './LaunchPromoBanner.tsx';
+import { LimitedTimeOfferBanner } from './LimitedTimeOfferBanner.tsx';
+
+const TRIAL_BAR_DISMISS_KEY = 'ex3-hide-trial-bar';
+
+const navLinkClass = ({ isActive }: { isActive: boolean }) =>
+  `text-base font-semibold ${isActive ? 'text-red-600' : 'text-gray-700 hover:text-red-600'}`;
+
+const MARKETING_PAGE_TITLES: Record<
+  string,
+  { title: string; subtitle: string }
+> = {
+  '/': {
+    title: 'Field-Built Fire Extinguisher Tracking',
+    subtitle: 'Inspections. AI guidance. Offline-aware workflow.',
+  },
+  '/features': {
+    title: 'Features',
+    subtitle:
+      'The major workflows your extinguisher program needs in one place',
+  },
+  '/pricing': {
+    title: 'Pricing',
+    subtitle: 'Plans that scale with your AI-assisted program',
+  },
+  '/how-it-works': {
+    title: 'How It Works',
+    subtitle:
+      'From setup to field evidence, reports, sharing, and audit history',
+  },
+  '/about': {
+    title: 'About',
+    subtitle: 'Independently built from field-level life safety experience',
+  },
+  '/getting-started': {
+    title: 'Getting Started',
+    subtitle: 'From signup to a stronger inspection program',
+  },
+  '/faq': {
+    title: 'FAQ',
+    subtitle:
+      'Answers for setup, AI, field work, reports, sharing, and pricing',
+  },
+  '/terms': {
+    title: 'Terms of Service',
+    subtitle: 'Usage terms and legal guidelines',
+  },
+  '/privacy-policy': {
+    title: 'Privacy Policy',
+    subtitle: 'How we collect, use, and protect your data',
+  },
+};
+
+type PublicMarketingLayoutProps = {
+  children: ReactNode;
+};
+
+export function PublicMarketingLayout({
+  children,
+}: PublicMarketingLayoutProps) {
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const [trialBarHidden, setTrialBarHidden] = useState(true);
+  const location = useLocation();
+  const pageInfo = MARKETING_PAGE_TITLES[location.pathname] ?? {
+    title: 'ExtinguisherTracker',
+    subtitle: '',
+  };
+  const showLayoutMegaOffer = location.pathname !== '/pricing';
+
+  useEffect(() => {
+    try {
+      setTrialBarHidden(
+        window.localStorage.getItem(TRIAL_BAR_DISMISS_KEY) === '1',
+      );
+    } catch {
+      setTrialBarHidden(false);
+    }
+  }, []);
+
+  function dismissTrialBar() {
+    setTrialBarHidden(true);
+    try {
+      window.localStorage.setItem(TRIAL_BAR_DISMISS_KEY, '1');
+    } catch {
+      // ignore
+    }
+  }
+
+  return (
+    <div className="flex min-h-screen flex-col bg-gray-50 text-gray-900">
+      {!trialBarHidden ? (
+        <div className="bg-red-700 px-4 py-2.5 text-center text-sm text-white">
+          <span className="font-semibold">7-day Pro trial</span> — no credit
+          card required.{' '}
+          <MarketingSignupLink
+            proTrial
+            className="font-bold underline decoration-white/50 underline-offset-2 hover:text-red-100"
+          >
+            {TRIAL_CTA_LABEL}
+          </MarketingSignupLink>
+          <button
+            type="button"
+            onClick={dismissTrialBar}
+            className="ml-4 text-xs text-red-200 hover:text-white"
+            aria-label="Dismiss trial announcement"
+          >
+            Dismiss
+          </button>
+        </div>
+      ) : null}
+      <header className="sticky top-0 z-40 border-b border-gray-200 bg-white/95 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5">
+          <Link
+            to="/"
+            className="relative z-10 flex min-w-0 flex-1 items-center gap-2 sm:gap-3 md:flex-initial md:shrink-0"
+            onClick={() => setMobileOpen(false)}
+          >
+            <img
+              src="/logo.png"
+              alt="Extinguisher Tracker"
+              className="h-14 w-14 shrink-0 rounded-xl object-contain sm:h-20 sm:w-20 md:h-24 md:w-24"
+            />
+            <span className="truncate text-lg font-bold tracking-tight text-gray-900 sm:text-2xl md:text-3xl">
+              Extinguisher <span className="text-red-600">Tracker</span>
+            </span>
+          </Link>
+
+          <nav
+            className="hidden min-w-0 flex-1 flex-wrap items-center justify-end gap-x-3 gap-y-2 md:flex lg:gap-x-5"
+            aria-label="Primary"
+          >
+            <NavLink to="/" end className={navLinkClass}>
+              Home
+            </NavLink>
+            <NavLink to="/features" className={navLinkClass}>
+              Features
+            </NavLink>
+            <NavLink to="/pricing" className={navLinkClass}>
+              Pricing
+            </NavLink>
+            <NavLink
+              to="/how-it-works"
+              className={(props) => `${navLinkClass(props)} whitespace-nowrap`}
+            >
+              How it works
+            </NavLink>
+            <NavLink to="/getting-started" className={navLinkClass}>
+              Getting started
+            </NavLink>
+            <NavLink to="/faq" className={navLinkClass}>
+              FAQ
+            </NavLink>
+            <Link
+              to="/login"
+              className="whitespace-nowrap text-base font-semibold text-gray-700 hover:text-red-600"
+            >
+              Sign in
+            </Link>
+            <MarketingSignupLink
+              proTrial
+              className="rounded-lg bg-red-600 px-5 py-2.5 text-base font-semibold text-white shadow hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2"
+            >
+              {TRIAL_CTA_LABEL}
+            </MarketingSignupLink>
+          </nav>
+
+          <button
+            type="button"
+            className="shrink-0 rounded-md p-2 text-gray-700 md:hidden"
+            aria-expanded={mobileOpen}
+            aria-controls="marketing-mobile-nav"
+            onClick={() => setMobileOpen((o) => !o)}
+          >
+            {mobileOpen ? (
+              <X className="h-6 w-6" aria-hidden />
+            ) : (
+              <Menu className="h-6 w-6" aria-hidden />
+            )}
+            <span className="sr-only">Menu</span>
+          </button>
+        </div>
+
+        {mobileOpen ? (
+          <div
+            id="marketing-mobile-nav"
+            className="border-t border-gray-200 bg-white px-4 py-4 md:hidden"
+          >
+            <div className="flex flex-col gap-3">
+              <NavLink
+                to="/"
+                end
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                Home
+              </NavLink>
+              <NavLink
+                to="/features"
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                Features
+              </NavLink>
+              <NavLink
+                to="/pricing"
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                Pricing
+              </NavLink>
+              <NavLink
+                to="/how-it-works"
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                How it works
+              </NavLink>
+              <NavLink
+                to="/getting-started"
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                Getting started
+              </NavLink>
+              <NavLink
+                to="/faq"
+                className={navLinkClass}
+                onClick={() => setMobileOpen(false)}
+              >
+                FAQ
+              </NavLink>
+              <Link
+                to="/login"
+                className="text-sm font-medium text-gray-700"
+                onClick={() => setMobileOpen(false)}
+              >
+                Sign in
+              </Link>
+              <MarketingSignupLink
+                proTrial
+                className="rounded-md bg-red-600 px-4 py-2 text-center text-sm font-medium text-white"
+                onClick={() => setMobileOpen(false)}
+              >
+                {TRIAL_CTA_LABEL}
+              </MarketingSignupLink>
+            </div>
+          </div>
+        ) : null}
+      </header>
+
+      {showLayoutMegaOffer ? <LimitedTimeOfferBanner /> : null}
+      <LaunchPromoBanner />
+
+      {/* Hero banner with page title overlay */}
+      <div className="relative border-t border-gray-800 bg-gray-900 pt-1 sm:pt-2">
+        <img
+          src="/extinguisherTracker2.png"
+          alt="Extinguisher Tracker — Fire Extinguisher Tracking Made Simple"
+          className="mx-auto block w-[96%] object-contain py-2 sm:py-3"
+        />
+        <div className="absolute inset-0 flex items-end justify-center pb-4 sm:pb-6">
+          <div className="text-center">
+            <h2 className="text-2xl font-extrabold text-white drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] sm:text-3xl md:text-4xl">
+              {pageInfo.title}
+            </h2>
+            {pageInfo.subtitle && (
+              <p className="mt-1 text-sm font-medium text-gray-200 drop-shadow-[0_1px_3px_rgba(0,0,0,0.8)] sm:text-base">
+                {pageInfo.subtitle}
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Top ad banner — below header */}
+      <PublicAdSlot
+        format="banner"
+        className="border-b border-gray-200 bg-white px-4 py-2"
+      />
+
+      <main className="flex-1">{children}</main>
+
+      {/* Bottom ad banner — above footer */}
+      <PublicAdSlot
+        format="banner"
+        className="border-t border-gray-200 bg-white px-4 py-2"
+      />
+
+      <footer className="border-t border-gray-200 bg-white">
+        <div className="mx-auto max-w-6xl px-4 py-10 sm:px-6">
+          <div className="flex flex-col gap-8 sm:flex-row sm:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <img
+                  src="/logo.png"
+                  alt="ExtinguisherTracker"
+                  className="h-8 w-8 rounded-lg object-contain"
+                />
+                <p className="text-sm font-semibold text-red-600">
+                  ExtinguisherTracker
+                </p>
+              </div>
+              <p className="mt-2 max-w-sm text-sm text-gray-600">
+                Field-built inspection and compliance workflow software for
+                teams responsible for fire extinguisher programs.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-8 text-sm">
+              <div className="flex flex-col gap-2">
+                <span className="font-medium text-gray-900">Product</span>
+                <Link
+                  to="/features"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Features
+                </Link>
+                <Link
+                  to="/pricing"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Pricing
+                </Link>
+                <Link
+                  to="/how-it-works"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  How it works
+                </Link>
+                <Link
+                  to="/getting-started"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Getting started
+                </Link>
+                <Link to="/faq" className="text-gray-600 hover:text-red-600">
+                  FAQ
+                </Link>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="font-medium text-gray-900">Account</span>
+                <Link to="/login" className="text-gray-600 hover:text-red-600">
+                  Sign in
+                </Link>
+                <MarketingSignupLink
+                  proTrial
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  {TRIAL_CTA_LABEL}
+                </MarketingSignupLink>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="font-medium text-gray-900">Company</span>
+                <Link to="/about" className="text-gray-600 hover:text-red-600">
+                  About
+                </Link>
+                <Link to="/terms" className="text-gray-600 hover:text-red-600">
+                  Terms of Service
+                </Link>
+                <Link
+                  to="/privacy-policy"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Privacy Policy
+                </Link>
+              </div>
+              <div className="flex flex-col gap-2">
+                <span className="font-medium text-gray-900">Contact</span>
+                <a
+                  href="mailto:help@example.com"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Support
+                </a>
+                <a
+                  href="mailto:info@example.com"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  General Inquiries
+                </a>
+                <a
+                  href="mailto:billing@example.com"
+                  className="text-gray-600 hover:text-red-600"
+                >
+                  Billing
+                </a>
+              </div>
+            </div>
+          </div>
+          <p className="mt-8 text-xs text-gray-500">
+            © {new Date().getFullYear()} ExtinguisherTracker. All rights
+            reserved.
+          </p>
+        </div>
+      </footer>
+    </div>
+  );
+}

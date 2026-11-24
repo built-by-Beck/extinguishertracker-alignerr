@@ -1,0 +1,364 @@
+import { useState, useEffect } from 'react';
+import { httpsCallable } from 'firebase/functions';
+import { Check, Loader2, Sparkles, X as XIcon, Zap } from 'lucide-react';
+import { functions } from '../../lib/firebase.ts';
+import {
+  PLANS,
+  type PlanName,
+  YEARLY_DISCOUNT_FRACTION,
+} from '../../lib/planConfig.ts';
+import {
+  getLaunchPromoCheckoutHint,
+  LAUNCH_PROMO_ENABLED,
+  TRIAL_DAYS,
+} from '../../lib/billingConfig.ts';
+import { marketingPriceForInterval } from '../../lib/marketingPlanPricing.ts';
+import { PlanHeadlinePrice } from './PlanHeadlinePrice.tsx';
+import { useOrg } from '../../hooks/useOrg.ts';
+import { useAuth } from '../../hooks/useAuth.ts';
+import {
+  readBillingIntervalPreference,
+  writeBillingIntervalPreference,
+} from '../../lib/billingIntervalPreference.ts';
+import { type BillingIntervalUi } from './BillingIntervalToggle.tsx';
+
+export function PlanSelector({
+  initialInterval,
+}: {
+  initialInterval?: BillingIntervalUi;
+} = {}) {
+  const { org } = useOrg();
+  const { userProfile } = useAuth();
+  const [billingInterval, setBillingIntervalState] =
+    useState<BillingIntervalUi>(
+      () => initialInterval ?? readBillingIntervalPreference(),
+    );
+
+  function setBillingInterval(next: BillingIntervalUi) {
+    setBillingIntervalState(next);
+    writeBillingIntervalPreference(next);
+  }
+
+  useEffect(() => {
+    if (initialInterval) {
+      setBillingIntervalState(initialInterval);
+      writeBillingIntervalPreference(initialInterval);
+    }
+  }, [initialInterval]);
+  const [loading, setLoading] = useState<PlanName | null>(null);
+  const [error, setError] = useState('');
+
+  const orgId = userProfile?.activeOrgId;
+  const currentPlan = org?.plan;
+  const discountPct = Math.round(YEARLY_DISCOUNT_FRACTION * 100);
+
+  async function handleSelectPlan(plan: PlanName) {
+    if (!orgId || plan === currentPlan) return;
+    setLoading(plan);
+    setError('');
+
+    try {
+      const createCheckoutSession = httpsCallable<
+        { orgId: string; plan: string; billingInterval?: BillingIntervalUi },
+        { url: string }
+      >(functions, 'createCheckoutSession');
+
+      const result = await createCheckoutSession({
+        orgId,
+        plan,
+        billingInterval,
+      });
+      if (result.data.url) {
+        window.location.href = result.data.url;
+      }
+    } catch (err: unknown) {
+      const message =
+        err instanceof Error ? err.message : 'Failed to start checkout.';
+      setError(message);
+    } finally {
+      setLoading(null);
+    }
+  }
+
+  return (
+    <div>
+      {error && (
+        <p className="mb-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </p>
+      )}
+
+      <div className="mb-6 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <p className="text-sm font-medium text-gray-900">Billing</p>
+          <p className="mt-1 text-xs text-gray-500">
+            {TRIAL_DAYS}-day free trial for new subscriptions. Promo codes
+            accepted at checkout.
+          </p>
+          {getLaunchPromoCheckoutHint() ? (
+            <p className="mt-1 text-xs font-medium text-amber-800">
+              {getLaunchPromoCheckoutHint()}
+            </p>
+          ) : null}
+        </div>
+        <div className="inline-flex rounded-lg border border-gray-200 bg-gray-50 p-1">
+          <button
+            type="button"
+            onClick={() => setBillingInterval('month')}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              billingInterval === 'month'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Monthly
+          </button>
+          <button
+            type="button"
+            onClick={() => setBillingInterval('year')}
+            className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+              billingInterval === 'year'
+                ? 'bg-white text-gray-900 shadow-sm'
+                : 'text-gray-600 hover:text-gray-900'
+            }`}
+          >
+            Yearly (save {Math.round(YEARLY_DISCOUNT_FRACTION * 100)}%)
+          </button>
+        </div>
+      </div>
+
+      <div className="mb-6 mt-6 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50 to-red-50 p-5">
+        <div className="mb-3 flex items-center gap-2">
+          <Sparkles className="h-5 w-5 text-blue-500" />
+          <h3 className="text-sm font-bold text-gray-900">
+            AI Compliance Assistant - included with Pro, Elite, and Enterprise
+          </h3>
+        </div>
+        <p className="mb-3 text-sm text-gray-600">
+          How to use AI: open the dashboard assistant and ask about overdue
+          inspections, due dates, or a quick compliance summary. It works in
+          Pro, Elite, and Enterprise plans.
+        </p>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {[
+            '"Which extinguishers are overdue?"',
+            '"Explain the 6-year maintenance rule"',
+            '"Summarize my compliance status"',
+            '"What does NFPA 10 require monthly?"',
+          ].map((q) => (
+            <div
+              key={q}
+              className="flex items-center gap-2 rounded-md bg-white/70 px-3 py-1.5 text-xs text-gray-700"
+            >
+              <Sparkles className="h-3 w-3 shrink-0 text-blue-500" />
+              {q}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {PLANS.filter((p) => p.name !== 'enterprise').map((plan) => {
+          const isCurrent = currentPlan === plan.name;
+          const isLoading = loading === plan.name;
+          const isPro = plan.name === 'pro';
+          const trialEligible =
+            isPro &&
+            !org?.stripeSubscriptionId &&
+            org?.proTrialConsumed !== true;
+          const offerProTrialUi = trialEligible && billingInterval === 'month';
+          const showTrialHint = trialEligible && billingInterval === 'year';
+          const priceDisplay =
+            plan.monthlyPrice !== null
+              ? marketingPriceForInterval(
+                  plan.monthlyPrice,
+                  billingInterval,
+                  plan.name !== 'enterprise'
+                    ? (plan.name as 'basic' | 'pro' | 'elite')
+                    : undefined,
+                )
+              : null;
+
+          return (
+            <div
+              key={plan.name}
+              className={`relative rounded-xl border-2 p-6 transition-shadow ${
+                isPro && !isCurrent
+                  ? 'border-red-400 bg-white shadow-xl shadow-red-100'
+                  : isCurrent
+                    ? 'border-red-500 bg-red-50'
+                    : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-md'
+              }`}
+            >
+              {isPro && !isCurrent && (
+                <div className="absolute -top-3.5 left-1/2 -translate-x-1/2">
+                  <span className="inline-flex items-center gap-1 rounded-full bg-red-600 px-3 py-1 text-xs font-bold uppercase tracking-wide text-white shadow-md">
+                    <Zap className="h-3 w-3" />
+                    Most Popular
+                  </span>
+                </div>
+              )}
+
+              <h3
+                className={`text-lg font-bold ${isPro && !isCurrent ? 'mt-1 text-red-700' : 'text-gray-900'}`}
+              >
+                {plan.displayName}
+              </h3>
+
+              {priceDisplay ? (
+                <>
+                  <PlanHeadlinePrice price={priceDisplay} variant="settings" />
+                  {billingInterval === 'year' ? (
+                    <p className="mt-0.5 text-xs text-gray-500">
+                      {LAUNCH_PROMO_ENABLED ? (
+                        <>
+                          first year ·{' '}
+                          <span className="font-semibold text-amber-700">
+                            50% launch promo
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          billed yearly ·{' '}
+                          <span className="font-semibold text-green-700">
+                            save {discountPct}%
+                          </span>
+                        </>
+                      )}
+                    </p>
+                  ) : LAUNCH_PROMO_ENABLED &&
+                    !priceDisplay.regularPriceLabel ? (
+                    <p className="mt-0.5 text-xs font-medium text-amber-700">
+                      first year · 50% launch promo
+                    </p>
+                  ) : null}
+                </>
+              ) : null}
+
+              {priceDisplay?.promoCode ? (
+                <p className="mt-2 text-xs font-semibold text-amber-800">
+                  Code {priceDisplay.promoCode} at checkout
+                </p>
+              ) : null}
+
+              <p className="mt-2 text-sm text-gray-500">
+                {plan.name === 'basic'
+                  ? 'Best for small businesses replacing paper logs with easier inspections, reminders, and compliance reports.'
+                  : plan.name === 'pro'
+                    ? 'Adds camera barcode scanning, GPS capture, inspection photos, and the AI assistant.'
+                    : 'Everything in Pro, plus team members & invites, higher scale, and priority support.'}
+              </p>
+
+              {offerProTrialUi && (
+                <p className="mt-2 rounded-md bg-blue-50 px-2 py-1.5 text-xs font-medium text-blue-800">
+                  7-day Pro trial — no credit card at checkout. Add a payment
+                  method before the trial ends to keep Pro access (see Terms).
+                </p>
+              )}
+
+              {showTrialHint && (
+                <p className="mt-2 text-xs text-gray-500">
+                  Want to try before you commit?{' '}
+                  <button
+                    type="button"
+                    onClick={() => setBillingInterval('month')}
+                    className="font-medium text-blue-600 hover:underline underline-offset-2"
+                  >
+                    Switch to Monthly for a free 7-day trial.
+                  </button>
+                </p>
+              )}
+
+              <ul className="mt-4 space-y-2">
+                {plan.features.map((feature) => {
+                  const isAiFeature = feature.toLowerCase().includes('ai');
+                  const isExcluded = feature
+                    .toLowerCase()
+                    .includes('not included');
+                  return (
+                    <li
+                      key={feature}
+                      className={`flex items-start gap-2 text-sm ${isExcluded ? 'text-gray-400' : 'text-gray-600'}`}
+                    >
+                      {isExcluded ? (
+                        <XIcon className="mt-0.5 h-4 w-4 shrink-0 text-gray-300" />
+                      ) : (
+                        <Check
+                          className={`mt-0.5 h-4 w-4 shrink-0 ${isAiFeature ? 'text-blue-500' : 'text-green-500'}`}
+                        />
+                      )}
+                      <span
+                        className={
+                          isAiFeature && !isExcluded
+                            ? 'font-medium text-blue-700'
+                            : ''
+                        }
+                      >
+                        {feature}
+                        {isAiFeature && !isExcluded && (
+                          <Sparkles className="ml-1 inline h-3 w-3 text-blue-500" />
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+
+              <button
+                onClick={() => handleSelectPlan(plan.name)}
+                disabled={isCurrent || isLoading || loading !== null}
+                className={`mt-6 w-full rounded-lg px-4 py-2.5 text-sm font-semibold transition-colors ${
+                  isCurrent
+                    ? 'cursor-default bg-red-100 text-red-700'
+                    : isPro
+                      ? 'bg-red-600 text-white shadow-sm shadow-red-300 hover:bg-red-700 disabled:opacity-50'
+                      : 'bg-red-600 text-white hover:bg-red-700 disabled:opacity-50'
+                }`}
+              >
+                {isLoading ? (
+                  <Loader2 className="mx-auto h-4 w-4 animate-spin" />
+                ) : isCurrent ? (
+                  'Current Plan'
+                ) : offerProTrialUi ? (
+                  'Start 7-day trial'
+                ) : currentPlan ? (
+                  'Switch Plan'
+                ) : (
+                  'Get Started'
+                )}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Enterprise section */}
+      {currentPlan === 'enterprise' ? (
+        <div className="mt-4 rounded-lg border-2 border-red-500 bg-red-50 p-4 text-center">
+          <p className="text-sm font-semibold text-gray-900">Enterprise Plan</p>
+          <p className="mt-1 text-sm text-gray-600">
+            Unlimited assets, all features, custom pricing, and priority
+            support.
+          </p>
+          <span className="mt-2 inline-block rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700">
+            Current Plan
+          </span>
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-4 text-center">
+          <p className="text-sm text-gray-600">
+            Need more than{' '}
+            {PLANS.find((p) => p.name === 'elite')?.assetLimit ?? 500}{' '}
+            extinguishers?{' '}
+            <span className="font-semibold text-gray-900">Enterprise</span>{' '}
+            plans with unlimited assets, AI access, and custom pricing are
+            available.
+          </p>
+          <p className="mt-1 text-sm text-gray-500">
+            Contact us at help@example.com
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}

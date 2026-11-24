@@ -1,0 +1,115 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper: check authentication
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Helper: get member document data
+    function memberData(orgId) {
+      return firestore.get(/databases/(default)/documents/org/$(orgId)/members/$(request.auth.uid)).data;
+    }
+
+    // Helper: get organization document data
+    function orgData(orgId) {
+      return firestore.get(/databases/(default)/documents/org/$(orgId)).data;
+    }
+
+    // Helper: check active membership
+    function isMember(orgId) {
+      return isAuth()
+        && firestore.exists(/databases/(default)/documents/org/$(orgId)/members/$(request.auth.uid))
+        && memberData(orgId).status == 'active';
+    }
+
+    // Helper: check role
+    function hasRole(orgId, roles) {
+      return isMember(orgId) && memberData(orgId).role in roles;
+    }
+
+    function isOrgCreator(orgId) {
+      return isMember(orgId) && orgData(orgId).createdBy == request.auth.uid;
+    }
+
+    function hasWritableSubscription(orgId) {
+      let org = orgData(orgId);
+      return org.plan == 'enterprise' || org.subscriptionStatus in ['active', 'trialing'];
+    }
+
+    function hasOrganizationBranding(orgId) {
+      let org = orgData(orgId);
+      return (org.featureFlags != null && org.featureFlags.organizationBranding == true)
+        || org.plan in ['pro', 'elite', 'enterprise'];
+    }
+
+    // Allowed inspection photo content types
+    function isAllowedImageContentType() {
+      return request.resource.contentType.matches('image/jpeg')
+        || request.resource.contentType.matches('image/png')
+        || request.resource.contentType.matches('image/webp');
+    }
+
+    // Max inspection photo size: 10 MB
+    function isWithinInspectionPhotoSizeLimit() {
+      return request.resource.size <= 10 * 1024 * 1024;
+    }
+
+    // Max organization logo size: 512 KB
+    function isWithinLogoSizeLimit() {
+      return request.resource.size <= 512 * 1024;
+    }
+
+    match /org/{orgId}/inspections/{inspectionId}/{fileName} {
+      allow read: if isMember(orgId);
+      allow write: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+        && isAllowedImageContentType()
+        && isWithinInspectionPhotoSizeLimit();
+      allow delete: if hasRole(orgId, ['owner', 'admin']);
+    }
+
+    match /org/{orgId}/custom-asset-inspections/{inspectionId}/{fileName} {
+      allow read: if isMember(orgId);
+      allow write: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+        && isAllowedImageContentType()
+        && isWithinInspectionPhotoSizeLimit();
+      allow delete: if hasRole(orgId, ['owner', 'admin']);
+    }
+
+    match /org/{orgId}/notes/{noteId}/{fileName} {
+      allow read: if isMember(orgId);
+      allow write: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+        && hasWritableSubscription(orgId)
+        && isAllowedImageContentType()
+        && isWithinInspectionPhotoSizeLimit();
+      allow delete: if hasRole(orgId, ['owner', 'admin']);
+    }
+
+    match /org/{orgId}/branding/logo/current {
+      allow read: if isMember(orgId);
+      allow write: if isOrgCreator(orgId)
+        && hasOrganizationBranding(orgId)
+        && hasWritableSubscription(orgId)
+        && isAllowedImageContentType()
+        && isWithinLogoSizeLimit();
+      allow delete: if isOrgCreator(orgId);
+    }
+
+    match /org/{orgId}/reports/{allPaths=**} {
+      allow read: if isMember(orgId);
+      allow write, delete: if false;
+    }
+
+    match /org/{orgId}/exports/{allPaths=**} {
+      allow read: if isMember(orgId);
+      allow write, delete: if false;
+    }
+
+    // Deny writes to every other org-scoped path by default.
+    match /org/{orgId}/{allPaths=**} {
+      allow read: if isMember(orgId);
+      allow write, delete: if false;
+    }
+  }
+}

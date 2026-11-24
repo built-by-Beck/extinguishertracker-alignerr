@@ -1,0 +1,343 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Public marketing stats (launch promo spots counter) — read-only for everyone.
+    match /public/{docId} {
+      allow read: if true;
+      allow write: if false;
+
+      match /redemptions/{orgId} {
+        allow read, write: if false;
+      }
+    }
+
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    function memberDoc(orgId) {
+      return /databases/$(database)/documents/org/$(orgId)/members/$(request.auth.uid);
+    }
+
+    function memberExists(orgId) {
+      return isAuth() && exists(memberDoc(orgId));
+    }
+
+    function memberData(orgId) {
+      return get(memberDoc(orgId)).data;
+    }
+
+    function isMember(orgId) {
+      return memberExists(orgId) && memberData(orgId).status == 'active';
+    }
+
+    function hasRole(orgId, roles) {
+      return isMember(orgId) && memberData(orgId).role in roles;
+    }
+
+    function isGuest(orgId) {
+      return isMember(orgId) && memberData(orgId).role == 'guest';
+    }
+
+    function orgDoc(orgId) {
+      return /databases/$(database)/documents/org/$(orgId);
+    }
+
+    function hasWritableSubscription(orgId) {
+      let org = get(orgDoc(orgId)).data;
+      return org.plan == 'enterprise' || org.subscriptionStatus in ['active', 'trialing'];
+    }
+
+    function hasCustomAssetInspections(orgId) {
+      let org = get(orgDoc(orgId)).data;
+      return (org.featureFlags != null && org.featureFlags.customAssetInspections == true)
+        || org.plan in ['pro', 'elite', 'enterprise'];
+    }
+
+    function isPresetAvatarId(value) {
+      return value in [
+        'helmet-red',
+        'shield-blue',
+        'clipboard-green',
+        'building-slate',
+        'spark-amber',
+        'hydrant-purple'
+      ];
+    }
+
+    function isValidUserCreate(uid) {
+      return request.resource.data.keys().hasOnly([
+          'displayName',
+          'email',
+          'avatarId',
+          'photoURL',
+          'defaultOrgId',
+          'activeOrgId',
+          'createdAt',
+          'updatedAt',
+          'lastLoginAt'
+        ])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() >= 2
+        && request.resource.data.displayName.size() <= 80
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.avatarId is string
+        && isPresetAvatarId(request.resource.data.avatarId)
+        && request.resource.data.photoURL == null
+        && request.resource.data.defaultOrgId == null
+        && request.resource.data.activeOrgId == null;
+    }
+
+    function isValidUserSessionUpdate(uid) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'activeOrgId',
+          'lastLoginAt',
+          'updatedAt'
+        ])
+        && (!('activeOrgId' in request.resource.data)
+          || request.resource.data.activeOrgId == null
+          || (
+            exists(/databases/$(database)/documents/org/$(request.resource.data.activeOrgId)/members/$(uid))
+            && get(/databases/$(database)/documents/org/$(request.resource.data.activeOrgId)/members/$(uid)).data.status == 'active'
+          ));
+    }
+
+    // Cached by Cloud Functions (billing/assetLimitSync.ts). Missing field = not reached.
+    function assetLimitReached(orgId) {
+      return get(orgDoc(orgId)).data.get('assetLimitReached', false) == true;
+    }
+
+    // An extinguisher counts toward the plan limit when it is non-deleted and lifecycle-active.
+    function countsTowardAssetLimit(ext) {
+      return ext.get('deletedAt', null) == null
+        && ext.get('lifecycleStatus', 'active') == 'active';
+    }
+
+    // The only inspection doc a client may create: a blank, pending custom-asset
+    // checklist row with the deterministic id used by ensureCustomAssetInspectionForWorkspace.
+    // Results (pass/fail, inspector, timestamp, attestation) are written only by
+    // the saveInspection / resetInspection Cloud Functions.
+    function isPendingAssetInspectionCreate(orgId, inspId) {
+      let d = request.resource.data;
+      return d.targetType == 'asset'
+        && d.orgId == orgId
+        && d.assetRefId is string
+        && d.workspaceId is string
+        && inspId == 'asset_' + d.assetRefId + '_' + d.workspaceId
+        && d.status == 'pending'
+        && d.inspectedAt == null
+        && d.inspectedBy == null
+        && d.inspectedByEmail == null
+        && d.attestation == null
+        && exists(/databases/$(database)/documents/org/$(orgId)/assets/$(d.assetRefId))
+        && exists(/databases/$(database)/documents/org/$(orgId)/workspaces/$(d.workspaceId));
+    }
+
+    // collectionGroup('members') — needed by OrgContext to find all orgs a user belongs to
+    match /{path=**}/members/{memberId} {
+      allow read: if isAuth() && request.auth.uid == resource.data.uid;
+    }
+
+    match /usr/{uid} {
+      allow read: if isAuth() && request.auth.uid == uid;
+      allow create: if isAuth() && request.auth.uid == uid && isValidUserCreate(uid);
+      allow update: if isAuth() && request.auth.uid == uid && isValidUserSessionUpdate(uid);
+      allow delete: if false;
+    }
+
+    match /invite/{inviteId} {
+      allow read: if isAuth() && (
+        request.auth.token.email == resource.data.email ||
+        hasRole(resource.data.orgId, ['owner', 'admin'])
+      );
+      allow write: if false;
+    }
+
+    match /org/{orgId} {
+      allow read: if isMember(orgId);
+
+      allow update: if hasRole(orgId, ['owner', 'admin'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'stripeCustomerId',
+          'stripeSubscriptionId',
+          'proTrialConsumed',
+          'subscriptionStatus',
+          'subscriptionPriceId',
+          'subscriptionCurrentPeriodEnd',
+          'trialEnd',
+          'trialUsedAt',
+          'plan',
+          'assetLimit',
+          'overLimit',
+          'assetLimitReached',
+          'featureFlags',
+          'status',
+          'slug',
+          'ownerUid',
+          'createdBy',
+          'createdAt',
+          'deletedAt',
+          'guestAccess',
+          'name',
+          'profile',
+          'branding'
+        ]);
+
+      allow create, delete: if false;
+
+      match /members/{memberId} {
+        // Users can always read their own membership doc (needed for collectionGroup queries)
+        // Other members' docs require active non-guest membership in the org
+        allow read: if isAuth() && (
+          request.auth.uid == resource.data.uid ||
+          (isMember(orgId) && !isGuest(orgId))
+        );
+        allow write: if false;
+      }
+
+      match /locations/{locId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+        allow delete: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+      }
+
+      match /inspectionRoutes/{routeId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+        allow delete: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+      }
+
+      match /extinguishers/{extId} {
+        allow read: if isMember(orgId);
+        // Plan asset limit: no new active units (and no restoring/re-activating old ones)
+        // once the org is at its limit. Replacements go through Cloud Functions.
+        allow create: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && (!countsTowardAssetLimit(request.resource.data) || !assetLimitReached(orgId));
+        allow update: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && (
+            countsTowardAssetLimit(resource.data)
+            || !countsTowardAssetLimit(request.resource.data)
+            || !assetLimitReached(orgId)
+          );
+        allow delete: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+
+        match /replacementHistory/{histId} {
+          allow read: if isMember(orgId) && !isGuest(orgId);
+          allow write: if false;
+        }
+      }
+
+      match /assets/{assetId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && hasCustomAssetInspections(orgId);
+        allow delete: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && hasCustomAssetInspections(orgId);
+      }
+
+      match /assetInspectionTemplates/{templateId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && hasCustomAssetInspections(orgId);
+        allow delete: if hasRole(orgId, ['owner', 'admin'])
+          && hasWritableSubscription(orgId)
+          && hasCustomAssetInspections(orgId);
+      }
+
+      match /workspaces/{wsId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin']) && hasWritableSubscription(orgId);
+        allow delete: if false;
+      }
+
+      match /inspections/{inspId} {
+        allow read: if isMember(orgId);
+        // Inspection results are compliance records: clients may only seed a blank
+        // pending custom-asset row. All result writes go through Cloud Functions.
+        allow create: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+          && hasWritableSubscription(orgId)
+          && hasCustomAssetInspections(orgId)
+          && isPendingAssetInspectionCreate(orgId, inspId);
+        allow update: if false;
+        // Allow owners/admins to delete pending inspections (e.g. when extinguisher is deleted)
+        allow delete: if hasRole(orgId, ['owner', 'admin'])
+                      && hasWritableSubscription(orgId)
+                      && resource.data.status == 'pending';
+      }
+
+      match /inspectionEvents/{eventId} {
+        allow read: if isMember(orgId);
+        // Append-only event log, written only by saveInspection / resetInspection.
+        allow write: if false;
+      }
+
+      match /sectionNotes/{noteId} {
+        allow read: if isMember(orgId);
+        allow create: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+          && hasWritableSubscription(orgId)
+          && request.resource.data.userId == request.auth.uid;
+        allow update: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+          && hasWritableSubscription(orgId)
+          && resource.data.userId == request.auth.uid;
+        allow delete: if false;
+      }
+
+      match /sectionTimes/{timeId} {
+        allow read: if isMember(orgId);
+        allow create, update: if hasRole(orgId, ['owner', 'admin', 'inspector']) && hasWritableSubscription(orgId);
+        allow delete: if false;
+      }
+
+      match /workTimeDaily/{docId} {
+        allow read: if isMember(orgId) && (
+          resource.data.userId == request.auth.uid
+          || hasRole(orgId, ['owner', 'admin'])
+        );
+        allow create, update: if hasRole(orgId, ['owner', 'admin', 'inspector'])
+          && hasWritableSubscription(orgId)
+          && request.resource.data.userId == request.auth.uid
+          && request.resource.data.durationMs is number
+          && request.resource.data.durationMs >= 0
+          && request.resource.data.durationMs <= 36000000;
+        allow delete: if false;
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isMember(orgId) && !isGuest(orgId);
+        allow create, update: if false;
+        allow delete: if false;
+      }
+
+      match /aiNotes/{noteId} {
+        allow read: if isMember(orgId) && !isGuest(orgId);
+        allow write: if false;
+      }
+
+      match /workDocuments/{documentId} {
+        allow read: if isMember(orgId) && !isGuest(orgId);
+        allow write: if false;
+      }
+
+      match /aiNoteEvents/{eventId} {
+        allow read: if hasRole(orgId, ['owner', 'admin']);
+        allow write: if false;
+      }
+
+      match /reports/{reportId} {
+        allow read: if isMember(orgId) && !isGuest(orgId);
+        allow write: if false;
+      }
+
+      match /auditLogs/{logId} {
+        allow read: if hasRole(orgId, ['owner', 'admin']);
+        allow write: if false;
+      }
+    }
+  }
+}

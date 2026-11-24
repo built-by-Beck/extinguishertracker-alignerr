@@ -33,10 +33,10 @@
   },
   "overrides": {
     "@tootallnate/once": "^3.0.1",
-    "@grpc/grpc-js": "^1.14.4",
-    "fast-uri": "^3.1.4",
+    "@grpc/grpc-js": "^1.14.7",
+    "fast-uri": "^3.1.9",
     "protobufjs": "^7.5.8",
-    "qs": "^6.15.2",
+    "qs": "^6.17.1",
     "uuid": "^11.1.1",
     "form-data": "^2.5.6",
     "@babel/core": "^7.29.6"
